@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,4 +25,29 @@ import java.io.Serializable;
 @SuppressWarnings("serial")
 public class LocalCachedMapClear implements Serializable {
 
+    private byte[] excludedId;
+    private byte[] requestId;
+    private boolean releaseSemaphore;
+
+    public LocalCachedMapClear() {
+    }
+    
+    public LocalCachedMapClear(byte[] excludedId, byte[] requestId, boolean releaseSemaphore) {
+        this.excludedId = excludedId;
+        this.requestId = requestId;
+        this.releaseSemaphore = releaseSemaphore;
+    }
+
+    public byte[] getExcludedId() {
+        return excludedId;
+    }
+
+    public boolean isReleaseSemaphore() {
+        return releaseSemaphore;
+    }
+
+    public byte[] getRequestId() {
+        return requestId;
+    }
+    
 }

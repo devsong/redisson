@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,15 +15,13 @@
  */
 package org.redisson.reactive;
 
-import java.util.concurrent.atomic.AtomicLong;
-
 import org.reactivestreams.Publisher;
 import org.reactivestreams.Subscription;
-import org.redisson.api.RCollectionReactive;
+import org.redisson.api.RFuture;
+import reactor.core.publisher.BaseSubscriber;
+import reactor.core.publisher.Mono;
 
-import reactor.rx.Promise;
-import reactor.rx.Promises;
-import reactor.rx.action.support.DefaultSubscriber;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 
@@ -31,70 +29,53 @@ import reactor.rx.action.support.DefaultSubscriber;
  *
  * @param <V> value type
  */
-public class PublisherAdder<V> {
+public abstract class PublisherAdder<V> {
 
-    private final RCollectionReactive<V> destination;
+    public abstract RFuture<Boolean> add(Object o);
 
-    public PublisherAdder(RCollectionReactive<V> destination) {
-        this.destination = destination;
-    }
+    public Publisher<Boolean> addAll(Publisher<? extends V> c) {
+        return Mono.create(emitter -> emitter.onRequest(n -> {
+            c.subscribe(new BaseSubscriber<V>() {
 
-    public Integer sum(Integer first, Integer second) {
-        return first + second;
-    }
+                volatile boolean completed;
+                final AtomicLong values = new AtomicLong();
+                Subscription s;
+                volatile Boolean lastSize = false;
 
-    public Publisher<Integer> addAll(Publisher<? extends V> c) {
-        final Promise<Integer> promise = Promises.prepare();
+                @Override
+                protected void hookOnSubscribe(Subscription s) {
+                    this.s = s;
+                    s.request(1);
+                }
 
-        c.subscribe(new DefaultSubscriber<V>() {
+                @Override
+                protected void hookOnNext(V o) {
+                    values.getAndIncrement();
+                    add(o).whenComplete((res, e) -> {
+                        if (e != null) {
+                            emitter.error(e);
+                            return;
+                        }
 
-            volatile boolean completed;
-            AtomicLong values = new AtomicLong();
-            Subscription s;
-            Integer lastSize = 0;
-
-            @Override
-            public void onSubscribe(Subscription s) {
-                this.s = s;
-                s.request(1);
-            }
-
-            @Override
-            public void onNext(V o) {
-                values.getAndIncrement();
-                destination.add(o).subscribe(new DefaultSubscriber<Integer>() {
-
-                    @Override
-                    public void onSubscribe(Subscription s) {
-                        s.request(1);
-                    }
-
-                    @Override
-                    public void onError(Throwable t) {
-                        promise.onError(t);
-                    }
-
-                    @Override
-                    public void onNext(Integer o) {
-                        lastSize = sum(lastSize, o);
+                        if (res) {
+                            lastSize = true;
+                        }
                         s.request(1);
                         if (values.decrementAndGet() == 0 && completed) {
-                            promise.onNext(lastSize);
+                            emitter.success(lastSize);
                         }
-                    }
-                });
-            }
-
-            @Override
-            public void onComplete() {
-                completed = true;
-                if (values.get() == 0) {
-                    promise.onNext(lastSize);
+                    });
                 }
-            }
-        });
 
-        return promise;
+                @Override
+                protected void hookOnComplete() {
+                    completed = true;
+                    if (values.get() == 0) {
+                        emitter.success(lastSize);
+                    }
+                }
+            });
+        }));
     }
 
 }

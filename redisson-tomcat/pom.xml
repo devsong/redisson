@@ -4,61 +4,26 @@
     <parent>
         <groupId>org.redisson</groupId>
         <artifactId>redisson-parent</artifactId>
-        <version>2.11.3-SNAPSHOT</version>
+        <version>3.30.1-SNAPSHOT</version>
         <relativePath>../</relativePath>
     </parent>
 
     <artifactId>redisson-tomcat</artifactId>
     <packaging>pom</packaging>
 
-    <name>Redisson/Tomcat</name>
+    <name>Redisson/Tomcat Session Manager</name>
 
     <modules>
-        <module>redisson-tomcat-6</module>
         <module>redisson-tomcat-7</module>
         <module>redisson-tomcat-8</module>
         <module>redisson-tomcat-9</module>
+        <module>redisson-tomcat-10</module>
     </modules>
 
     <build>
         <plugins>
             <plugin>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.5.1</version>
-                <configuration>
-                    <source>${source.version}</source>
-                    <target>${source.version}</target>
-                    <optimize>true</optimize>
-                    <showDeprecations>true</showDeprecations>
-                </configuration>
-                <executions>
-                    <execution>
-                        <id>default-testCompile</id>
-                        <phase>process-test-sources</phase>
-                        <goals>
-                            <goal>testCompile</goal>
-                        </goals>
-                        <configuration>
-                            <fork>true</fork>
-                            <source>${test.source.version}</source>
-                            <target>${test.source.version}</target>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
-
-            <plugin>
-         	<groupId>org.apache.maven.plugins</groupId>
          	<artifactId>maven-javadoc-plugin</artifactId>
-         	<version>3.0.0</version>
-         	<executions>
-                   <execution>
-                     <id>attach-javadocs</id>
-                     <goals>
-                         <goal>jar</goal>
-                     </goals>
-                   </execution>
-         	</executions>
             </plugin>
         </plugins>
     </build>
@@ -73,15 +38,25 @@
         <dependency>
             <groupId>org.apache.httpcomponents</groupId>
             <artifactId>fluent-hc</artifactId>
-            <version>4.5.2</version>
+            <version>4.5.14</version>
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>junit</groupId>
-            <artifactId>junit</artifactId>
-            <version>4.12</version>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-engine</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-params</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+
     </dependencies>
 
 </project>

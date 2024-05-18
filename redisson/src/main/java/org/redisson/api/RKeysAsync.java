@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
  */
 package org.redisson.api;
 
-import java.util.Collection;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -35,15 +34,29 @@ public interface RKeysAsync {
     RFuture<Boolean> moveAsync(String name, int database);
     
     /**
-     * Transfer an object from source Redis instance to destination Redis instance
+     * Transfer object from source Redis instance to destination Redis instance
      *
      * @param name of object
      * @param host - destination host
      * @param port - destination port
      * @param database - destination database
+     * @param timeout - maximum idle time in any moment of the communication with the destination instance in milliseconds
      * @return void 
      */
-    RFuture<Void> migrateAsync(String name, String host, int port, int database);
+    RFuture<Void> migrateAsync(String name, String host, int port, int database, long timeout);
+    
+    /**
+     * Copy object from source Redis instance to destination Redis instance
+     * in async mode
+     *
+     * @param name of object
+     * @param host - destination host
+     * @param port - destination port
+     * @param database - destination database
+     * @param timeout - maximum idle time in any moment of the communication with the destination instance in milliseconds
+     * @return void
+     */
+    RFuture<Void> copyAsync(String name, String host, int port, int database, long timeout);
     
     /**
      * Set a timeout for object. After the timeout has expired,
@@ -145,19 +158,6 @@ public interface RKeysAsync {
     RFuture<String> randomKeyAsync();
 
     /**
-     * Find keys by key search pattern in async mode
-     *
-     *  Supported glob-style patterns:
-     *    h?llo subscribes to hello, hallo and hxllo
-     *    h*llo subscribes to hllo and heeeello
-     *    h[ae]llo subscribes to hello and hallo, but not hillo
-     *
-     * @param pattern - match pattern
-     * @return collections of keys
-     */
-    RFuture<Collection<String>> findKeysByPatternAsync(String pattern);
-
-    /**
      * Delete multiple objects by a key pattern.
      * <p>
      * Method executes in <b>NON atomic way</b> in cluster mode due to lua script limitations.
@@ -178,7 +178,7 @@ public interface RKeysAsync {
      * @param objects of Redisson
      * @return number of removed keys
      */
-    RFuture<Long> deleteAsync(RObject ... objects);
+    RFuture<Long> deleteAsync(RObject... objects);
     
     /**
      * Delete multiple objects by name
@@ -186,7 +186,7 @@ public interface RKeysAsync {
      * @param keys - object names
      * @return number of removed keys
      */
-    RFuture<Long> deleteAsync(String ... keys);
+    RFuture<Long> deleteAsync(String... keys);
 
     /**
      * Delete multiple objects by name.
@@ -197,7 +197,7 @@ public interface RKeysAsync {
      * @param keys - object names
      * @return number of removed keys
      */
-    RFuture<Long> unlinkAsync(String ... keys);
+    RFuture<Long> unlinkAsync(String... keys);
     
     /**
      * Returns the number of keys in the currently-selected database in async mode
@@ -207,13 +207,24 @@ public interface RKeysAsync {
     RFuture<Long> countAsync();
 
     /**
+     * Swap two databases.
+     * <p>
+     * Requires Redis 4.0+
+     *
+     * @return void
+     */
+    RFuture<Void> swapdbAsync(int db1, int db2);
+
+    /**
      * Delete all keys of currently selected database
+     *
      * @return void
      */
     RFuture<Void> flushdbAsync();
 
     /**
      * Delete all keys of all existing databases
+     *
      * @return void
      */
     RFuture<Void> flushallAsync();
@@ -237,5 +248,28 @@ public interface RKeysAsync {
      * @return void
      */
     RFuture<Void> flushallParallelAsync();
-    
+
+    /**
+     * Adds global object event listener
+     * which is invoked for each Redisson object.
+     *
+     * @see org.redisson.api.listener.TrackingListener
+     * @see org.redisson.api.listener.SetObjectListener
+     * @see org.redisson.api.listener.NewObjectListener
+     * @see org.redisson.api.listener.FlushListener
+     * @see org.redisson.api.ExpiredObjectListener
+     * @see org.redisson.api.DeletedObjectListener
+     *
+     * @param listener object event listener
+     * @return listener id
+     */
+    RFuture<Integer> addListenerAsync(ObjectListener listener);
+
+    /**
+     * Removes global object event listener
+     *
+     * @param listenerId - listener id
+     */
+    RFuture<Void> removeListenerAsync(int listenerId);
+
 }

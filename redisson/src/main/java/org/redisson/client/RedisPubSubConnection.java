@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,31 +15,22 @@
  */
 package org.redisson.client;
 
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Queue;
-import java.util.Set;
-import java.util.concurrent.ConcurrentLinkedQueue;
-
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
+import io.netty.util.concurrent.FutureListener;
 import org.redisson.client.codec.Codec;
 import org.redisson.client.protocol.CommandData;
 import org.redisson.client.protocol.RedisCommand;
 import org.redisson.client.protocol.RedisCommands;
 import org.redisson.client.protocol.decoder.MultiDecoder;
-import org.redisson.client.protocol.pubsub.PubSubMessage;
-import org.redisson.client.protocol.pubsub.PubSubMessageDecoder;
-import org.redisson.client.protocol.pubsub.PubSubPatternMessage;
-import org.redisson.client.protocol.pubsub.PubSubPatternMessageDecoder;
-import org.redisson.client.protocol.pubsub.PubSubStatusMessage;
-import org.redisson.client.protocol.pubsub.PubSubType;
-import org.redisson.misc.RPromise;
+import org.redisson.client.protocol.pubsub.*;
 
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
-import io.netty.util.concurrent.Future;
-import io.netty.util.concurrent.FutureListener;
-import io.netty.util.internal.PlatformDependent;
+import java.util.Collections;
+import java.util.Map;
+import java.util.Queue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
  * 
@@ -48,22 +39,18 @@ import io.netty.util.internal.PlatformDependent;
  */
 public class RedisPubSubConnection extends RedisConnection {
 
-    final Queue<RedisPubSubListener<Object>> listeners = new ConcurrentLinkedQueue<RedisPubSubListener<Object>>();
-    final Map<String, Codec> channels = PlatformDependent.newConcurrentHashMap();
-    final Map<String, Codec> patternChannels = PlatformDependent.newConcurrentHashMap();
-    final Set<String> unsubscibedChannels = new HashSet<String>();
-    final Set<String> punsubscibedChannels = new HashSet<String>();
+    final Queue<RedisPubSubListener<Object>> listeners = new ConcurrentLinkedQueue<>();
+    final Map<ChannelName, Codec> channels = new ConcurrentHashMap<>();
+    final Map<ChannelName, Codec> shardedChannels = new ConcurrentHashMap<>();
+    final Map<ChannelName, Codec> patternChannels = new ConcurrentHashMap<>();
+    final Map<ChannelName, PubSubType> unsubscribedChannels = new ConcurrentHashMap<>();
 
-    public RedisPubSubConnection(RedisClient redisClient, Channel channel, RPromise<RedisPubSubConnection> connectionPromise) {
+    public RedisPubSubConnection(RedisClient redisClient, Channel channel, CompletableFuture<RedisPubSubConnection> connectionPromise) {
         super(redisClient, channel, connectionPromise);
     }
 
-    public void addListener(RedisPubSubListener listener) {
-        listeners.add(listener);
-    }
-
-    public void addOneShotListener(RedisPubSubListener listener) {
-        listeners.add(new OneShotPubSubListener<Object>(this, listener));
+    public void addListener(RedisPubSubListener<?> listener) {
+        listeners.add((RedisPubSubListener<Object>) listener);
     }
 
     public void removeListener(RedisPubSubListener<?> listener) {
@@ -88,96 +75,111 @@ public class RedisPubSubConnection extends RedisConnection {
         }
     }
 
-    public void subscribe(Codec codec, String ... channel) {
-        for (String ch : channel) {
-            channels.put(ch, codec);
+    public ChannelFuture subscribe(CompletableFuture<Void> promise, Codec codec, ChannelName... channels) {
+        for (ChannelName ch : channels) {
+            this.channels.put(ch, codec);
         }
-        async(new PubSubMessageDecoder(codec.getValueDecoder()), RedisCommands.SUBSCRIBE, channel);
+        return async(promise, new PubSubMessageDecoder(codec.getValueDecoder()), RedisCommands.SUBSCRIBE, channels);
     }
 
-    public void psubscribe(Codec codec, String ... channel) {
-        for (String ch : channel) {
+    public ChannelFuture ssubscribe(CompletableFuture<Void> promise, Codec codec, ChannelName... channels) {
+        for (ChannelName ch : channels) {
+            this.shardedChannels.put(ch, codec);
+        }
+        return async(promise, new PubSubMessageDecoder(codec.getValueDecoder()), RedisCommands.SSUBSCRIBE, channels);
+    }
+
+    public ChannelFuture psubscribe(CompletableFuture<Void> promise, Codec codec, ChannelName... channels) {
+        for (ChannelName ch : channels) {
             patternChannels.put(ch, codec);
         }
-        async(new PubSubPatternMessageDecoder(codec.getValueDecoder()), RedisCommands.PSUBSCRIBE, channel);
+        return async(promise, new PubSubPatternMessageDecoder(codec.getValueDecoder()), RedisCommands.PSUBSCRIBE, channels);
     }
 
-    public void unsubscribe(final String ... channels) {
-        synchronized (this) {
-            for (String ch : channels) {
+    public ChannelFuture subscribe(Codec codec, ChannelName... channels) {
+        for (ChannelName ch : channels) {
+            this.channels.put(ch, codec);
+        }
+        return async(new PubSubMessageDecoder(codec.getValueDecoder()), RedisCommands.SUBSCRIBE, channels);
+    }
+
+    public ChannelFuture ssubscribe(Codec codec, ChannelName... channels) {
+        for (ChannelName ch : channels) {
+            this.shardedChannels.put(ch, codec);
+        }
+        return async(new PubSubMessageDecoder(codec.getValueDecoder()), RedisCommands.SSUBSCRIBE, channels);
+    }
+
+    public ChannelFuture psubscribe(Codec codec, ChannelName... channels) {
+        for (ChannelName ch : channels) {
+            patternChannels.put(ch, codec);
+        }
+        return async(new PubSubPatternMessageDecoder(codec.getValueDecoder()), RedisCommands.PSUBSCRIBE, channels);
+    }
+
+    public ChannelFuture unsubscribe(PubSubType type, ChannelName... channels) {
+        RedisCommand<Object> command;
+        if (type == PubSubType.UNSUBSCRIBE) {
+            command = RedisCommands.UNSUBSCRIBE;
+            for (ChannelName ch : channels) {
                 this.channels.remove(ch);
-                unsubscibedChannels.add(ch);
+                unsubscribedChannels.put(ch, type);
+            }
+        } else if (type == PubSubType.SUNSUBSCRIBE) {
+            command = RedisCommands.SUNSUBSCRIBE;
+            for (ChannelName ch : channels) {
+                this.shardedChannels.remove(ch);
+                unsubscribedChannels.put(ch, type);
+            }
+        } else {
+            command = RedisCommands.PUNSUBSCRIBE;
+            for (ChannelName ch : channels) {
+                patternChannels.remove(ch);
+                unsubscribedChannels.put(ch, type);
             }
         }
-        ChannelFuture future = async((MultiDecoder)null, RedisCommands.UNSUBSCRIBE, channels);
-        future.addListener(new FutureListener<Void>() {
-            @Override
-            public void operationComplete(Future<Void> future) throws Exception {
-                if (!future.isSuccess()) {
-                    for (String channel : channels) {
-                        removeDisconnectListener(channel);
-                        onMessage(new PubSubStatusMessage(PubSubType.UNSUBSCRIBE, channel));
-                    }
+
+        ChannelFuture future = async((MultiDecoder) null, command, channels);
+        future.addListener((FutureListener<Void>) f -> {
+            if (!f.isSuccess()) {
+                for (ChannelName channel : channels) {
+                    removeDisconnectListener(channel);
+                    onMessage(new PubSubStatusMessage(type, channel));
                 }
             }
         });
+        return future;
     }
     
-    public void removeDisconnectListener(String channel) {
-        synchronized (this) {
-            unsubscibedChannels.remove(channel);
-            punsubscibedChannels.remove(channel);
-        }
+    public void removeDisconnectListener(ChannelName channel) {
+        unsubscribedChannels.remove(channel);
     }
     
     @Override
     public void fireDisconnected() {
         super.fireDisconnected();
-        
-        Set<String> channels = new HashSet<String>();
-        Set<String> pchannels = new HashSet<String>();
-        synchronized (this) {
-            channels.addAll(unsubscibedChannels);
-            pchannels.addAll(punsubscibedChannels);
-        }
-        for (String channel : channels) {
-            onMessage(new PubSubStatusMessage(PubSubType.UNSUBSCRIBE, channel));
-        }
-        for (String channel : pchannels) {
-            onMessage(new PubSubStatusMessage(PubSubType.PUNSUBSCRIBE, channel));
-        }
+
+        unsubscribedChannels.forEach((key, value) -> onMessage(new PubSubStatusMessage(value, key)));
     }
     
-    public void punsubscribe(final String ... channels) {
-        synchronized (this) {
-            for (String ch : channels) {
-                patternChannels.remove(ch);
-                punsubscibedChannels.add(ch);
-            }
-        }
-        ChannelFuture future = async((MultiDecoder)null, RedisCommands.PUNSUBSCRIBE, channels);
-        future.addListener(new FutureListener<Void>() {
-            @Override
-            public void operationComplete(Future<Void> future) throws Exception {
-                if (!future.isSuccess()) {
-                    for (String channel : channels) {
-                        removeDisconnectListener(channel);
-                        onMessage(new PubSubStatusMessage(PubSubType.PUNSUBSCRIBE, channel));
-                    }
-                }
-            }
-        });
+    private <T, R> ChannelFuture async(MultiDecoder<Object> messageDecoder, RedisCommand<T> command, Object... params) {
+        CompletableFuture<Void> promise = new CompletableFuture<>();
+        return channel.writeAndFlush(new CommandData<>(promise, messageDecoder, null, command, params));
     }
 
-    private <T, R> ChannelFuture async(MultiDecoder<Object> messageDecoder, RedisCommand<T> command, Object ... params) {
-        return channel.writeAndFlush(new CommandData<T, R>(null, messageDecoder, null, command, params));
+    private <T, R> ChannelFuture async(CompletableFuture<Void> promise, MultiDecoder<Object> messageDecoder, RedisCommand<T> command, Object... params) {
+        return channel.writeAndFlush(new CommandData<>(promise, messageDecoder, null, command, params));
     }
 
-    public Map<String, Codec> getChannels() {
+    public Map<ChannelName, Codec> getShardedChannels() {
+        return Collections.unmodifiableMap(shardedChannels);
+    }
+
+    public Map<ChannelName, Codec> getChannels() {
         return Collections.unmodifiableMap(channels);
     }
 
-    public Map<String, Codec> getPatternChannels() {
+    public Map<ChannelName, Codec> getPatternChannels() {
         return Collections.unmodifiableMap(patternChannels);
     }
 

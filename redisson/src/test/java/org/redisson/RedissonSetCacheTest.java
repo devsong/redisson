@@ -1,24 +1,21 @@
 package org.redisson;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import org.joor.Reflect;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+import org.redisson.api.RSetCache;
+import org.redisson.client.codec.IntegerCodec;
+import org.redisson.eviction.EvictionScheduler;
 
 import java.io.Serializable;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.Map;
-import java.util.Set;
+import java.time.Duration;
+import java.util.*;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
-import org.junit.Assert;
-import org.junit.Test;
-import org.redisson.api.RSetCache;
-import org.redisson.codec.MsgPackJacksonCodec;
+import static org.assertj.core.api.Assertions.assertThat;
 
-public class RedissonSetCacheTest extends BaseTest {
+public class RedissonSetCacheTest extends RedisDockerTest {
 
     public static class SimpleBean implements Serializable {
 
@@ -33,6 +30,88 @@ public class RedissonSetCacheTest extends BaseTest {
         }
 
     }
+
+    @Test
+    public void testAddIfExists() throws InterruptedException {
+        RSetCache<String> cache = redisson.getSetCache("list");
+        cache.add("a", 1, TimeUnit.SECONDS);
+        assertThat(cache.addIfExists(Duration.ofSeconds(2), "a")).isTrue();
+
+        Thread.sleep(1500);
+        assertThat(cache.contains("a")).isTrue();
+        Thread.sleep(700);
+        assertThat(cache.contains("a")).isFalse();
+    }
+
+    @Test
+    public void testAddAll() {
+        RSetCache<String> cache = redisson.getSetCache("list");
+        cache.add("a", 1, TimeUnit.SECONDS);
+        Map<String, Duration> map = new HashMap<>();
+        map.put("a", Duration.ofSeconds(2));
+        map.put("b", Duration.ofSeconds(2));
+        map.put("c", Duration.ofSeconds(2));
+        assertThat(cache.addAll(map)).isEqualTo(2);
+        assertThat(cache.size()).isEqualTo(3);
+    }
+
+    @Test
+    public void testAddAllIfExists() throws InterruptedException {
+        RSetCache<String> cache = redisson.getSetCache("list");
+        Map<String, Duration> map = new HashMap<>();
+        map.put("a", Duration.ofSeconds(2));
+        map.put("b", Duration.ofSeconds(2));
+        map.put("c", Duration.ofSeconds(2));
+        assertThat(cache.addAllIfExist(map)).isZero();
+        assertThat(cache.size()).isZero();
+
+        cache.add("a", 1, TimeUnit.SECONDS);
+        cache.add("b", 1, TimeUnit.SECONDS);
+        assertThat(cache.addAllIfExist(map)).isEqualTo(2);
+        assertThat(cache.contains("c")).isFalse();
+
+        Thread.sleep(1500);
+        assertThat(cache.contains("a")).isTrue();
+        assertThat(cache.contains("b")).isTrue();
+        Thread.sleep(700);
+        assertThat(cache.contains("a")).isFalse();
+        assertThat(cache.contains("b")).isFalse();
+    }
+
+    @Test
+    public void testTryAdd() {
+        RSetCache<String> cache = redisson.getSetCache("list", IntegerCodec.INSTANCE);
+        Set<String> names = new HashSet<>();
+        int elements = 200000;
+        for (int i = 0; i < elements; i++) {
+            names.add("name" + i);
+        }
+
+        boolean s = cache.tryAdd(names.toArray(new String[]{}));
+        assertThat(s).isTrue();
+        assertThat(cache.size()).isEqualTo(elements);
+
+        Set<String> names2 = new HashSet<>();
+        for (int i = elements+1; i < elements + 10000; i++) {
+            names2.add("name" + i);
+        }
+        names2.add("name10");
+
+        boolean r = cache.tryAdd(names2.toArray(new String[]{}));
+        assertThat(r).isFalse();
+        assertThat(cache.size()).isEqualTo(elements);
+    }
+
+    @Test
+    public void testDestroy() {
+        RSetCache<String> cache = redisson.getSetCache("test");
+        
+        EvictionScheduler evictionScheduler = ((Redisson)redisson).getEvictionScheduler();
+        Map<?, ?> map = Reflect.on(evictionScheduler).get("tasks");
+        assertThat(map.isEmpty()).isFalse();
+        cache.destroy();
+        assertThat(map.isEmpty()).isTrue();
+    }
     
     @Test
     public void testRemoveAll() {
@@ -44,6 +123,7 @@ public class RedissonSetCacheTest extends BaseTest {
         assertThat(set.removeAll(Arrays.asList(1, 3))).isTrue();
         assertThat(set.removeAll(Arrays.asList(1, 3))).isFalse();
         assertThat(set).containsOnly(2);
+        set.destroy();
     }
     
     @Test
@@ -53,12 +133,14 @@ public class RedissonSetCacheTest extends BaseTest {
         set.add(1, 1, TimeUnit.SECONDS);
         assertThat(set.delete()).isTrue();
         assertThat(set.delete()).isFalse();
+        set.destroy();
     }
 
     @Test
     public void testEmptyReadAll() {
         RSetCache<Integer> set = redisson.getSetCache("set");
         assertThat(set.readAll()).isEmpty();
+        set.destroy();
     }
     
     @Test
@@ -72,6 +154,7 @@ public class RedissonSetCacheTest extends BaseTest {
         map.remove(0);
         set.add(map);
         set.iterator().next();
+        set.destroy();
     }
     
     @Test
@@ -80,7 +163,8 @@ public class RedissonSetCacheTest extends BaseTest {
         sb.setLng(1L);
         RSetCache<SimpleBean> set = redisson.getSetCache("simple");
         assertThat(set.add(sb)).isTrue();
-        Assert.assertEquals(sb.getLng(), set.iterator().next().getLng());
+        Assertions.assertEquals(sb.getLng(), set.iterator().next().getLng());
+        set.destroy();
     }
 
     @Test
@@ -90,11 +174,11 @@ public class RedissonSetCacheTest extends BaseTest {
         assertThat(set).contains("123");
 
         Thread.sleep(500);
-        
-        assertThat(set.size()).isEqualTo(1);
-        assertThat(set).doesNotContain("123");
+
+        assertThat(set.contains("123")).isFalse();
         
         assertThat(set.add("123", 1, TimeUnit.SECONDS)).isTrue();
+        set.destroy();
 
     }
 
@@ -106,6 +190,7 @@ public class RedissonSetCacheTest extends BaseTest {
         assertThat(set.add("123", 3, TimeUnit.SECONDS)).isFalse();
         Thread.sleep(2000);
         assertThat(set.contains("123")).isTrue();
+        set.destroy();
     }
     
     @Test
@@ -114,28 +199,31 @@ public class RedissonSetCacheTest extends BaseTest {
         assertThat(set.add("123", 1, TimeUnit.SECONDS)).isTrue();
         Thread.sleep(1000);
 
-        Assert.assertFalse(set.contains("123"));
+        Assertions.assertFalse(set.contains("123"));
 
         assertThat(set.add("4341", 1, TimeUnit.SECONDS)).isTrue();
         Thread.sleep(1000);
 
-        Assert.assertFalse(set.contains("4341"));
+        Assertions.assertFalse(set.contains("4341"));
+        set.destroy();
     }
     
     @Test
     public void testAddExpireThenAdd() throws InterruptedException, ExecutionException {
         RSetCache<String> set = redisson.getSetCache("simple31");
         assertThat(set.add("123", 500, TimeUnit.MILLISECONDS)).isTrue();
-        
+        assertThat(set.size()).isEqualTo(1);
+
         Thread.sleep(500);
 
-        assertThat(set.size()).isEqualTo(1);
+        assertThat(set.size()).isZero();
         assertThat(set.contains("123")).isFalse();
 
         assertThat(set.add("123")).isTrue();
         Thread.sleep(1000);
 
         assertThat(set.contains("123")).isTrue();
+        set.destroy();
     }
 
 
@@ -154,6 +242,7 @@ public class RedissonSetCacheTest extends BaseTest {
         Thread.sleep(300);
 
         assertThat(set.contains("123")).isTrue();
+        set.destroy();
     }
 
     @Test
@@ -163,17 +252,18 @@ public class RedissonSetCacheTest extends BaseTest {
         set.add(3, 2, TimeUnit.SECONDS);
         set.add(7, 3, TimeUnit.SECONDS);
 
-        Assert.assertTrue(set.remove(1));
-        Assert.assertFalse(set.contains(1));
+        Assertions.assertTrue(set.remove(1));
+        Assertions.assertFalse(set.contains(1));
         assertThat(set).containsOnly(3, 7);
 
-        Assert.assertFalse(set.remove(1));
+        Assertions.assertFalse(set.remove(1));
         assertThat(set).containsOnly(3, 7);
 
-        Assert.assertTrue(set.remove(3));
-        Assert.assertFalse(set.contains(3));
+        Assertions.assertTrue(set.remove(3));
+        Assertions.assertFalse(set.contains(3));
         assertThat(set).containsOnly(7);
-        Assert.assertEquals(1, set.size());
+        Assertions.assertEquals(1, set.size());
+        set.destroy();
     }
 
     @Test
@@ -203,10 +293,11 @@ public class RedissonSetCacheTest extends BaseTest {
             iteration++;
         }
 
-        Assert.assertEquals(2, iteration);
+        Assertions.assertEquals(2, iteration);
 
-        Assert.assertFalse(set.contains("4"));
-        Assert.assertFalse(set.contains("5"));
+        Assertions.assertFalse(set.contains("4"));
+        Assertions.assertFalse(set.contains("5"));
+        set.destroy();
     }
 
     @Test
@@ -222,17 +313,18 @@ public class RedissonSetCacheTest extends BaseTest {
         }
 
         checkIterator(set, setCopy);
+        set.destroy();
     }
 
     private void checkIterator(Set<Long> set, Set<Long> setCopy) {
         for (Iterator<Long> iterator = set.iterator(); iterator.hasNext();) {
             Long value = iterator.next();
             if (!setCopy.remove(value)) {
-                Assert.fail();
+                Assertions.fail();
             }
         }
 
-        Assert.assertEquals(0, setCopy.size());
+        Assertions.assertEquals(0, setCopy.size());
     }
 
     @Test
@@ -243,10 +335,11 @@ public class RedissonSetCacheTest extends BaseTest {
             set.add(i*10, 15, TimeUnit.SECONDS);
         }
 
-        Assert.assertTrue(set.retainAll(Arrays.asList(1, 2)));
+        Assertions.assertTrue(set.retainAll(Arrays.asList(1, 2)));
         Thread.sleep(500);
         assertThat(set).containsOnly(1, 2);
-        Assert.assertEquals(2, set.size());
+        Assertions.assertEquals(2, set.size());
+        set.destroy();
     }
 
     @Test
@@ -264,8 +357,9 @@ public class RedissonSetCacheTest extends BaseTest {
             iterator.remove();
             cnt++;
         }
-        Assert.assertEquals(10000, cnt);
-        Assert.assertEquals(0, set.size());
+        Assertions.assertEquals(10000, cnt);
+        Assertions.assertEquals(0, set.size());
+        set.destroy();
     }
 
     @Test
@@ -275,9 +369,10 @@ public class RedissonSetCacheTest extends BaseTest {
             set.add(i);
         }
 
-        Assert.assertTrue(set.containsAll(Collections.emptyList()));
-        Assert.assertTrue(set.containsAll(Arrays.asList(30, 11)));
-        Assert.assertFalse(set.containsAll(Arrays.asList(30, 711, 11)));
+        Assertions.assertTrue(set.containsAll(Collections.emptyList()));
+        Assertions.assertTrue(set.containsAll(Arrays.asList(30, 11)));
+        Assertions.assertFalse(set.containsAll(Arrays.asList(30, 711, 11)));
+        set.destroy();
     }
 
     @Test
@@ -295,6 +390,7 @@ public class RedissonSetCacheTest extends BaseTest {
 
         String[] strs = set.toArray(new String[0]);
         assertThat(strs).containsOnly("1", "4", "5", "3");
+        set.destroy();
     }
 
     @Test
@@ -309,9 +405,10 @@ public class RedissonSetCacheTest extends BaseTest {
 
         Thread.sleep(1000);
 
-        Assert.assertFalse(set.contains(new TestObject("2", "3")));
-        Assert.assertTrue(set.contains(new TestObject("1", "2")));
-        Assert.assertFalse(set.contains(new TestObject("1", "9")));
+        Assertions.assertFalse(set.contains(new TestObject("2", "3")));
+        Assertions.assertTrue(set.contains(new TestObject("1", "2")));
+        Assertions.assertFalse(set.contains(new TestObject("1", "9")));
+        set.destroy();
     }
 
     @Test
@@ -324,7 +421,8 @@ public class RedissonSetCacheTest extends BaseTest {
         set.add(new TestObject("3", "4"));
         set.add(new TestObject("5", "6"));
 
-        Assert.assertEquals(4, set.size());
+        Assertions.assertEquals(4, set.size());
+        set.destroy();
     }
 
     @Test
@@ -338,7 +436,8 @@ public class RedissonSetCacheTest extends BaseTest {
         set.add(5);
         set.add(5);
 
-        Assert.assertEquals(5, set.size());
+        Assertions.assertEquals(5, set.size());
+        set.destroy();
     }
 
     @Test
@@ -347,6 +446,7 @@ public class RedissonSetCacheTest extends BaseTest {
         set.add(1, 1, TimeUnit.SECONDS);
         Thread.sleep(1005);
         assertThat(set.readAll()).isEmpty();
+        set.destroy();
     }
     
     @Test
@@ -359,6 +459,7 @@ public class RedissonSetCacheTest extends BaseTest {
         set.add(5);
 
         assertThat(set.readAll()).containsOnly(1, 2, 3, 4, 5);
+        set.destroy();
     }
 
     @Test
@@ -370,8 +471,9 @@ public class RedissonSetCacheTest extends BaseTest {
         set.add(4);
         set.add(5);
 
-        Assert.assertTrue(set.retainAll(Collections.<Integer>emptyList()));
-        Assert.assertEquals(0, set.size());
+        Assertions.assertTrue(set.retainAll(Collections.<Integer>emptyList()));
+        Assertions.assertEquals(0, set.size());
+        set.destroy();
     }
 
     @Test
@@ -380,8 +482,9 @@ public class RedissonSetCacheTest extends BaseTest {
         set.add(1);
         set.add(2);
 
-        Assert.assertFalse(set.retainAll(Arrays.asList(1, 2))); // nothing changed
+        Assertions.assertFalse(set.retainAll(Arrays.asList(1, 2))); // nothing changed
         assertThat(set).containsOnly(1, 2);
+        set.destroy();
     }
 
     @Test
@@ -396,6 +499,7 @@ public class RedissonSetCacheTest extends BaseTest {
         Thread.sleep(1000);
 
         assertThat(cache).contains("0", "2", "3");
+        cache.destroy();
     }
 
     @Test
@@ -403,11 +507,12 @@ public class RedissonSetCacheTest extends BaseTest {
         RSetCache<String> cache = redisson.getSetCache("simple");
         cache.add("8", 1, TimeUnit.SECONDS);
 
-        cache.expire(100, TimeUnit.MILLISECONDS);
+        cache.expire(Duration.ofMillis(100));
 
         Thread.sleep(500);
 
-        Assert.assertEquals(0, cache.size());
+        Assertions.assertEquals(0, cache.size());
+        cache.destroy();
     }
 
     @Test
@@ -419,7 +524,8 @@ public class RedissonSetCacheTest extends BaseTest {
 
         Thread.sleep(500);
 
-        Assert.assertEquals(0, cache.size());
+        Assertions.assertEquals(0, cache.size());
+        cache.destroy();
     }
 
     @Test
@@ -433,20 +539,112 @@ public class RedissonSetCacheTest extends BaseTest {
 
         Thread.sleep(500);
 
-        Assert.assertEquals(1, cache.size());
+        Assertions.assertEquals(1, cache.size());
+        cache.destroy();
     }
 
     @Test
     public void testScheduler() throws InterruptedException {
-        RSetCache<String> cache = redisson.getSetCache("simple33", new MsgPackJacksonCodec());
-        Assert.assertFalse(cache.contains("33"));
+        RSetCache<String> cache = redisson.getSetCache("simple33");
+        Assertions.assertFalse(cache.contains("33"));
 
-        Assert.assertTrue(cache.add("33", 5, TimeUnit.SECONDS));
+        Assertions.assertTrue(cache.add("33", 5, TimeUnit.SECONDS));
 
         Thread.sleep(11000);
 
-        Assert.assertEquals(0, cache.size());
-
+        Assertions.assertEquals(0, cache.size());
+        cache.destroy();
     }
+
+    @Test
+    public void testUnion() throws InterruptedException {
+        redisson.getKeys().flushall();
+        RSetCache<Integer> cache1 = redisson.getSetCache("cache1", IntegerCodec.INSTANCE);
+        cache1.add(1);
+        cache1.add(2, 1, TimeUnit.SECONDS);
+        cache1.add(5, 1, TimeUnit.SECONDS);
+        cache1.add(3);
+
+        RSetCache<Integer> cache2 = redisson.getSetCache("cache2", IntegerCodec.INSTANCE);
+        cache2.add(4);
+        cache2.add(2, 1, TimeUnit.SECONDS);
+        cache2.add(5, 1, TimeUnit.SECONDS);
+        cache2.add(7);
+
+
+        RSetCache<Integer> cache3 = redisson.getSetCache("cache3", IntegerCodec.INSTANCE);
+        assertThat(cache3.union("cache1", "cache2")).isEqualTo(6);
+        assertThat(cache3).containsExactlyInAnyOrder(1, 3, 2, 5, 4, 7);
+        cache3.clear();
+
+        Thread.sleep(1500);
+
+        assertThat(cache3.union("cache1", "cache2")).isEqualTo(4);
+        assertThat(cache3).containsExactlyInAnyOrder(1, 3, 4, 7);
+
+        assertThat(redisson.getKeys().getKeys()).containsExactlyInAnyOrder("cache1", "cache2", "cache3");
+    }
+
+    @Test
+    public void testDiff() throws InterruptedException {
+        redisson.getKeys().flushall();
+        RSetCache<Integer> cache1 = redisson.getSetCache("cache1", IntegerCodec.INSTANCE);
+        cache1.add(1);
+        cache1.add(2, 1, TimeUnit.SECONDS);
+        cache1.add(5, 1, TimeUnit.SECONDS);
+        cache1.add(3, 1, TimeUnit.SECONDS);
+
+        RSetCache<Integer> cache2 = redisson.getSetCache("cache2", IntegerCodec.INSTANCE);
+        cache2.add(4);
+        cache2.add(2, 1, TimeUnit.SECONDS);
+        cache2.add(5, 1, TimeUnit.SECONDS);
+        cache2.add(7);
+
+
+        RSetCache<Integer> cache3 = redisson.getSetCache("cache3", IntegerCodec.INSTANCE);
+        assertThat(cache3.diff("cache1", "cache2")).isEqualTo(2);
+        assertThat(cache3).containsExactlyInAnyOrder(1, 3);
+        cache3.clear();
+
+        Thread.sleep(1500);
+
+        assertThat(cache3.diff("cache1", "cache2")).isEqualTo(1);
+        assertThat(cache3).containsExactlyInAnyOrder(1);
+
+        assertThat(redisson.getKeys().getKeys()).containsExactlyInAnyOrder("cache1", "cache2", "cache3");
+    }
+
+        @Test
+    public void testIntersection() throws InterruptedException {
+        redisson.getKeys().flushall();
+        RSetCache<Integer> cache1 = redisson.getSetCache("cache1");
+        cache1.add(1);
+        cache1.add(2, 1, TimeUnit.SECONDS);
+        cache1.add(5, 1, TimeUnit.SECONDS);
+        cache1.add(3);
+
+        RSetCache<Integer> cache2 = redisson.getSetCache("cache2");
+        cache2.add(4);
+        cache2.add(2, 1, TimeUnit.SECONDS);
+        cache2.add(5, 1, TimeUnit.SECONDS);
+        cache2.add(7);
+
+
+        assertThat(cache1.countIntersection("cache2")).isEqualTo(2);
+        RSetCache<Integer> cache3 = redisson.getSetCache("cache3");
+        assertThat(cache3.intersection("cache1", "cache2")).isEqualTo(2);
+        assertThat(cache3).containsExactlyInAnyOrder(2, 5);
+        cache3.clear();
+
+        Thread.sleep(1500);
+
+        assertThat(cache1.countIntersection("cache2")).isEqualTo(0);
+        assertThat(cache3.intersection("cache1", "cache2")).isEqualTo(0);
+        assertThat(cache3).isEmpty();
+
+        assertThat(redisson.getKeys().count()).isEqualTo(2);
+        assertThat(redisson.getKeys().getKeys()).containsExactlyInAnyOrder("cache1", "cache2");
+    }
+
 
 }

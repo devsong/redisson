@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,16 +15,22 @@
  */
 package org.redisson.connection;
 
-import java.net.InetSocketAddress;
-import java.util.Map;
-
 import org.redisson.api.ClusterNode;
 import org.redisson.api.NodeType;
 import org.redisson.api.RFuture;
 import org.redisson.client.RedisClient;
+import org.redisson.client.RedisTimeoutException;
+import org.redisson.client.codec.LongCodec;
 import org.redisson.client.codec.StringCodec;
 import org.redisson.client.protocol.RedisCommands;
-import org.redisson.command.CommandSyncService;
+import org.redisson.client.protocol.Time;
+import org.redisson.command.CommandAsyncExecutor;
+import org.redisson.misc.CompletableFutureWrapper;
+
+import java.net.InetSocketAddress;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 
@@ -34,10 +40,10 @@ import org.redisson.command.CommandSyncService;
 public class RedisClientEntry implements ClusterNode {
 
     private final RedisClient client;
-    private final CommandSyncService commandExecutor;
+    private final CommandAsyncExecutor commandExecutor;
     private final NodeType type;
 
-    public RedisClientEntry(RedisClient client, CommandSyncService commandExecutor, NodeType type) {
+    public RedisClientEntry(RedisClient client, CommandAsyncExecutor commandExecutor, NodeType type) {
         super();
         this.client = client;
         this.commandExecutor = commandExecutor;
@@ -58,16 +64,41 @@ public class RedisClientEntry implements ClusterNode {
         return client.getAddr();
     }
 
+    @Override
     public RFuture<Boolean> pingAsync() {
-        return commandExecutor.readAsync(client, null, RedisCommands.PING_BOOL);
+        return pingAsync(1, TimeUnit.SECONDS);
+    }
+    
+    @Override
+    public RFuture<Boolean> pingAsync(long timeout, TimeUnit timeUnit) {
+        RFuture<Boolean> f = commandExecutor.readAsync(client, null, RedisCommands.PING_BOOL);
+        CompletableFuture<Boolean> s = f.toCompletableFuture().handle((res, e) -> {
+            if (e != null) {
+                return false;
+            }
+
+            return res;
+        });
+
+        commandExecutor.getServiceManager().newTimeout(t -> {
+            RedisTimeoutException ex = new RedisTimeoutException("Command execution timeout for command: PING, Redis client: " + client);
+            s.completeExceptionally(ex);
+        }, timeout, timeUnit);
+        return new CompletableFutureWrapper<>(s);
     }
     
     @Override
     public boolean ping() {
         return commandExecutor.get(pingAsync());
     }
+    
+    @Override
+    public boolean ping(long timeout, TimeUnit timeUnit) {
+        return commandExecutor.get(pingAsync(timeout, timeUnit));
+    }
 
     @Override
+    @SuppressWarnings("AvoidInlineConditionals")
     public int hashCode() {
         final int prime = 31;
         int result = 1;
@@ -93,12 +124,12 @@ public class RedisClientEntry implements ClusterNode {
     }
 
     @Override
-    public RFuture<Long> timeAsync() {
-        return commandExecutor.readAsync(client, StringCodec.INSTANCE, RedisCommands.TIME);
+    public RFuture<Time> timeAsync() {
+        return commandExecutor.readAsync(client, LongCodec.INSTANCE, RedisCommands.TIME);
     }
     
     @Override
-    public long time() {
+    public Time time() {
         return commandExecutor.get(timeAsync());
     }
     
@@ -146,10 +177,10 @@ public class RedisClientEntry implements ClusterNode {
         }
         throw new IllegalStateException();
     }
-    
-    @Override
-    public Map<String, String> info() {
-        return clusterInfo();
-    }
 
+    @Override
+    public String toString() {
+        return "RedisClientEntry [client=" + client + ", type=" + type + "]";
+    }
+    
 }

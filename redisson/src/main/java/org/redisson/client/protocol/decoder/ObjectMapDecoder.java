@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
  */
 package org.redisson.client.protocol.decoder;
 
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -28,33 +27,41 @@ import org.redisson.client.protocol.Decoder;
  * @author Nikita Koksharov
  *
  */
-public class ObjectMapDecoder implements MultiDecoder<Map<Object, Object>> {
+public class ObjectMapDecoder implements MultiDecoder<Object> {
 
-    private Codec codec;
+    private final boolean decodeList;
     
-    public ObjectMapDecoder(Codec codec) {
+    public ObjectMapDecoder(boolean decodeList) {
         super();
-        this.codec = codec;
+        this.decodeList = decodeList;
     }
 
-    private int pos;
-    
     @Override
-    public Decoder<Object> getDecoder(int paramNum, State state) {
-        if (pos++ % 2 == 0) {
+    public Decoder<Object> getDecoder(Codec codec, int paramNum, State state, long size) {
+        if (state.getValue() != null && (Boolean) state.getValue()) {
+            return codec.getMapKeyDecoder();
+        }
+        
+        if (paramNum % 2 == 0) {
             return codec.getMapKeyDecoder();
         }
         return codec.getMapValueDecoder();
     }
     
     @Override
-    public Map<Object, Object> decode(List<Object> parts, State state) {
-        Map<Object, Object> result = new LinkedHashMap<Object, Object>(parts.size()/2);
+    public Object decode(List<Object> parts, State state) {
+        if (decodeList && (state.getValue() != null && (Boolean) state.getValue())) {
+            return parts;
+        }
+
+        Map<Object, Object> result = MultiDecoder.newLinkedHashMap(parts.size()/2);
         for (int i = 0; i < parts.size(); i++) {
             if (i % 2 != 0) {
                 result.put(parts.get(i-1), parts.get(i));
            }
         }
+
+        state.setValue(true);
         return result;
     }
 

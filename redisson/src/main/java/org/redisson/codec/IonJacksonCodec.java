@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,8 +18,13 @@ package org.redisson.codec;
 import com.fasterxml.jackson.dataformat.ion.IonObjectMapper;
 
 /**
- * Amazon Ion codec
- * 
+ * Amazon Ion codec based on Jackson implementation
+ * <a href="https://github.com/FasterXML/jackson-dataformats-binary/tree/master/ion">
+ *     https://github.com/FasterXML/jackson-dataformats-binary/tree/master/ion
+ * </a>
+ * <p>
+ * Fully thread-safe.
+ *
  * @author Nikita Koksharov
  *
  */
@@ -31,6 +36,10 @@ public class IonJacksonCodec extends JsonJacksonCodec {
     
     public IonJacksonCodec(ClassLoader classLoader) {
         super(createObjectMapper(classLoader, new IonObjectMapper()));
+    }
+    
+    public IonJacksonCodec(ClassLoader classLoader, IonJacksonCodec codec) {
+        super(createObjectMapper(classLoader, codec.mapObjectMapper.copy()));
     }
     
 }

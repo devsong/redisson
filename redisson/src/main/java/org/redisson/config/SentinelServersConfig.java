@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,10 +15,14 @@
  */
 package org.redisson.config;
 
-import java.net.URI;
+import org.redisson.api.HostNatMapper;
+import org.redisson.api.HostPortNatMapper;
+import org.redisson.api.NatMapper;
+
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
-import org.redisson.misc.URIBuilder;
+import java.util.Map;
 
 /**
  * 
@@ -27,9 +31,15 @@ import org.redisson.misc.URIBuilder;
  */
 public class SentinelServersConfig extends BaseMasterSlaveServersConfig<SentinelServersConfig> {
 
-    private List<URI> sentinelAddresses = new ArrayList<URI>();
+    private List<String> sentinelAddresses = new ArrayList<>();
+    
+    private NatMapper natMapper = NatMapper.direct();
 
     private String masterName;
+
+    private String sentinelUsername;
+
+    private String sentinelPassword;
 
     /**
      * Database index used for Redis connection
@@ -41,6 +51,12 @@ public class SentinelServersConfig extends BaseMasterSlaveServersConfig<Sentinel
      */
     private int scanInterval = 1000;
 
+    private boolean checkSentinelsList = true;
+
+    private boolean checkSlaveStatusWithSyncing = true;
+
+    private boolean sentinelsDiscovery = true;
+
     public SentinelServersConfig() {
     }
 
@@ -50,6 +66,12 @@ public class SentinelServersConfig extends BaseMasterSlaveServersConfig<Sentinel
         setMasterName(config.getMasterName());
         setDatabase(config.getDatabase());
         setScanInterval(config.getScanInterval());
+        setNatMapper(config.getNatMapper());
+        setCheckSentinelsList(config.isCheckSentinelsList());
+        setSentinelUsername(config.getSentinelUsername());
+        setSentinelPassword(config.getSentinelPassword());
+        setCheckSlaveStatusWithSyncing(config.isCheckSlaveStatusWithSyncing());
+        setSentinelsDiscovery(config.isSentinelsDiscovery());
     }
 
     /**
@@ -67,21 +89,50 @@ public class SentinelServersConfig extends BaseMasterSlaveServersConfig<Sentinel
     }
 
     /**
+     * Username required by the Redis Sentinel servers for authentication.
+     *
+     * @param sentinelUsername of Redis
+     * @return config
+     */
+    public SentinelServersConfig setSentinelUsername(String sentinelUsername) {
+        this.sentinelUsername = sentinelUsername;
+        return this;
+    }
+
+    public String getSentinelUsername() {
+        return sentinelUsername;
+    }
+
+    /**
+     * Password required by the Redis Sentinel servers for authentication.
+     * Used only if sentinel password differs from master and slave.
+     *
+     * @param sentinelPassword of Redis
+     * @return config
+     */
+    public SentinelServersConfig setSentinelPassword(String sentinelPassword) {
+        this.sentinelPassword = sentinelPassword;
+        return this;
+    }
+    public String getSentinelPassword() {
+        return sentinelPassword;
+    }
+
+
+    /**
      * Add Redis Sentinel node address in host:port format. Multiple nodes at once could be added.
      *
      * @param addresses of Redis
      * @return config
      */
-    public SentinelServersConfig addSentinelAddress(String ... addresses) {
-        for (String address : addresses) {
-            sentinelAddresses.add(URIBuilder.create(address));
-        }
+    public SentinelServersConfig addSentinelAddress(String... addresses) {
+        sentinelAddresses.addAll(Arrays.asList(addresses));
         return this;
     }
-    public List<URI> getSentinelAddresses() {
+    public List<String> getSentinelAddresses() {
         return sentinelAddresses;
     }
-    void setSentinelAddresses(List<URI> sentinelAddresses) {
+    public void setSentinelAddresses(List<String> sentinelAddresses) {
         this.sentinelAddresses = sentinelAddresses;
     }
 
@@ -105,6 +156,8 @@ public class SentinelServersConfig extends BaseMasterSlaveServersConfig<Sentinel
     }
     /**
      * Sentinel scan interval in milliseconds
+     * <p>
+     * Default is <code>1000</code>
      *
      * @param scanInterval in milliseconds
      * @return config
@@ -113,5 +166,85 @@ public class SentinelServersConfig extends BaseMasterSlaveServersConfig<Sentinel
         this.scanInterval = scanInterval;
         return this;
     }
-    
+
+    /*
+     * Use {@link #setNatMapper(NatMapper)}
+     */
+    @Deprecated
+    public SentinelServersConfig setNatMap(Map<String, String> natMap) {
+        HostPortNatMapper mapper = new HostPortNatMapper();
+        mapper.setHostsPortMap(natMap);
+        this.natMapper = mapper;
+        return this;
+    }
+
+    public NatMapper getNatMapper() {
+        return natMapper;
+    }
+
+    /**
+     * Defines NAT mapper which maps Redis URI object.
+     * Applied to all Redis connections.
+     *
+     * @see HostNatMapper
+     * @see HostPortNatMapper
+     *
+     * @param natMapper - nat mapper object
+     * @return config
+     */
+    public SentinelServersConfig setNatMapper(NatMapper natMapper) {
+        this.natMapper = natMapper;
+        return this;
+    }
+
+    public boolean isCheckSentinelsList() {
+        return checkSentinelsList;
+    }
+
+    /**
+     * Enables sentinels list check during Redisson startup.
+     * <p>
+     * Default is <code>true</code>
+     *
+     * @param checkSentinelsList - boolean value
+     * @return config
+     */
+    public SentinelServersConfig setCheckSentinelsList(boolean checkSentinelsList) {
+        this.checkSentinelsList = checkSentinelsList;
+        return this;
+    }
+
+    public boolean isCheckSlaveStatusWithSyncing() {
+        return checkSlaveStatusWithSyncing;
+    }
+
+    /**
+     * check node status from sentinel with 'master-link-status' flag
+     * <p>
+     * Default is <code>true</code>
+     *
+     * @param checkSlaveStatusWithSyncing - boolean value
+     * @return config
+     */
+    public SentinelServersConfig setCheckSlaveStatusWithSyncing(boolean checkSlaveStatusWithSyncing) {
+        this.checkSlaveStatusWithSyncing = checkSlaveStatusWithSyncing;
+        return this;
+    }
+
+    public boolean isSentinelsDiscovery() {
+        return sentinelsDiscovery;
+    }
+
+    /**
+     * Enables sentinels discovery.
+     * <p>
+     * Default is <code>true</code>
+     *
+     * @param sentinelsDiscovery - boolean value
+     * @return config
+     */
+    public SentinelServersConfig setSentinelsDiscovery(boolean sentinelsDiscovery) {
+        this.sentinelsDiscovery = sentinelsDiscovery;
+        return this;
+    }
 }

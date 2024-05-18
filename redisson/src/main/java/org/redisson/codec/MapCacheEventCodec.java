@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,27 +15,22 @@
  */
 package org.redisson.codec;
 
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-
+import io.netty.buffer.ByteBuf;
 import org.redisson.client.codec.Codec;
 import org.redisson.client.handler.State;
 import org.redisson.client.protocol.Decoder;
-import org.redisson.client.protocol.Encoder;
 
-import io.netty.buffer.ByteBuf;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 
  * @author Nikita Koksharov
  *
  */
-public class MapCacheEventCodec implements Codec {
+public class MapCacheEventCodec extends BaseEventCodec {
 
-    private final Codec codec;
-    private final boolean isWindows;
-    
     private final Decoder<Object> decoder = new Decoder<Object>() {
         @Override
         public Object decode(ByteBuf buf, State state) throws IOException {
@@ -56,57 +51,25 @@ public class MapCacheEventCodec implements Codec {
         }
     };
 
-    public MapCacheEventCodec(Codec codec, boolean isWindows) {
-        super();
-        this.codec = codec;
-        this.isWindows = isWindows;
+    public MapCacheEventCodec(Codec codec, OSType osType) {
+        super(codec, osType);
+    }
+    
+    public MapCacheEventCodec(ClassLoader classLoader, MapCacheEventCodec codec) {
+        super(newCodec(classLoader, codec), codec.osType);
     }
 
-    @Override
-    public Decoder<Object> getMapValueDecoder() {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public Encoder getMapValueEncoder() {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public Decoder<Object> getMapKeyDecoder() {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public Encoder getMapKeyEncoder() {
-        throw new UnsupportedOperationException();
+    private static Codec newCodec(ClassLoader classLoader, MapCacheEventCodec codec) {
+        try {
+            return codec.codec.getClass().getConstructor(ClassLoader.class, codec.codec.getClass()).newInstance(classLoader, codec.codec);
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     @Override
     public Decoder<Object> getValueDecoder() {
         return decoder;
-    }
-
-    @Override
-    public Encoder getValueEncoder() {
-        throw new UnsupportedOperationException();
-    }
-
-    private Object decode(ByteBuf buf, State state, Decoder<?> decoder) throws IOException {
-        int keyLen;
-        if (isWindows) {
-            keyLen = buf.readIntLE();
-        } else {
-            keyLen = (int) buf.readLongLE();
-        }
-        ByteBuf keyBuf = buf.readSlice(keyLen);
-        Object key = decoder.decode(keyBuf, state);
-        return key;
-    }
-
-    @Override
-    public ClassLoader getClassLoader() {
-        return getClass().getClassLoader();
     }
 
 }

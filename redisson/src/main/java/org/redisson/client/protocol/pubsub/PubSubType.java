@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,8 +15,18 @@
  */
 package org.redisson.client.protocol.pubsub;
 
+/**
+ * 
+ * @author Nikita Koksharov
+ *
+ */
 public enum PubSubType {
 
-    SUBSCRIBE, PSUBSCRIBE, PUNSUBSCRIBE, UNSUBSCRIBE
+    SUBSCRIBE,
+    PSUBSCRIBE,
+    SSUBSCRIBE,
+    PUNSUBSCRIBE,
+    UNSUBSCRIBE,
+    SUNSUBSCRIBE
 
 }

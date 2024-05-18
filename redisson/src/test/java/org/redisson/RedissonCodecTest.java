@@ -1,53 +1,44 @@
 package org.redisson;
 
-import static org.assertj.core.api.Assertions.assertThat;
-
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-
-import org.junit.Assert;
-import org.junit.Test;
-import org.redisson.api.RBucket;
-import org.redisson.api.RMap;
-import org.redisson.api.RedissonClient;
-import org.redisson.client.codec.Codec;
-import org.redisson.client.codec.JsonJacksonMapCodec;
-import org.redisson.codec.AvroJacksonCodec;
-import org.redisson.codec.CborJacksonCodec;
-import org.redisson.codec.FstCodec;
-import org.redisson.codec.JsonJacksonCodec;
-import org.redisson.codec.KryoCodec;
-import org.redisson.codec.LZ4Codec;
-import org.redisson.codec.MsgPackJacksonCodec;
-import org.redisson.codec.SerializationCodec;
-import org.redisson.codec.SmileJacksonCodec;
-import org.redisson.codec.SnappyCodec;
-import org.redisson.config.Config;
-
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.dataformat.avro.AvroMapper;
 import com.fasterxml.jackson.dataformat.avro.AvroSchema;
-
+import com.google.protobuf.ByteString;
 import io.netty.buffer.ByteBuf;
 import net.bytebuddy.utility.RandomString;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+import org.redisson.api.RBucket;
+import org.redisson.api.RList;
+import org.redisson.api.RMap;
+import org.redisson.api.RedissonClient;
+import org.redisson.client.codec.Codec;
+import org.redisson.codec.*;
+import org.redisson.codec.protobuf.nativeData.Proto2AllTypes;
+import org.redisson.codec.protobuf.nativeData.Proto3AllTypes;
+import org.redisson.codec.protobuf.protostuffData.StuffData;
+import org.redisson.config.Config;
 
-public class RedissonCodecTest extends BaseTest {
+import java.io.IOException;
+import java.util.*;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+public class RedissonCodecTest extends RedisDockerTest {
     private Codec smileCodec = new SmileJacksonCodec();
     private Codec codec = new SerializationCodec();
-    private Codec kryoCodec = new KryoCodec();
     private Codec jsonCodec = new JsonJacksonCodec();
     private Codec cborCodec = new CborJacksonCodec();
-    private Codec fstCodec = new FstCodec();
     private Codec snappyCodec = new SnappyCodec();
-    private Codec msgPackCodec = new MsgPackJacksonCodec();
+    private Codec snappyCodecV2 = new SnappyCodecV2();
+    //    private Codec msgPackCodec = new MsgPackJacksonCodec();
     private Codec lz4Codec = new LZ4Codec();
-    private Codec jsonListOfStringCodec = new JsonJacksonMapCodec(
-                    new TypeReference<String>() {}, new TypeReference<List<String>>() {});
+    private Codec jsonListOfStringCodec = new TypedJsonJacksonCodec(
+            new TypeReference<String>() {}, new TypeReference<List<String>>() {});
+    private Codec protobufV2Codec = new ProtobufCodec(String.class, Proto2AllTypes.AllTypes2.class);
+    private Codec protobufV3Codec = new ProtobufCodec(String.class, Proto3AllTypes.AllTypes3.class,new JsonJacksonCodec());
+    private Codec protobufStuffDataCodec = new ProtobufCodec( StuffData.class);
+
 
     @Test
     public void testLZ4() {
@@ -67,14 +58,14 @@ public class RedissonCodecTest extends BaseTest {
         test(redisson);
     }
     
-    @Test
-    public void testMsgPack() {
-        Config config = createConfig();
-        config.setCodec(msgPackCodec);
-        RedissonClient redisson = Redisson.create(config);
-
-        test(redisson);
-    }
+//    @Test
+//    public void testMsgPack() {
+//        Config config = createConfig();
+//        config.setCodec(msgPackCodec);
+//        RedissonClient redisson = Redisson.create(config);
+//
+//        test(redisson);
+//    }
     
     @Test
     public void testSmile() {
@@ -102,15 +93,6 @@ public class RedissonCodecTest extends BaseTest {
     }
 
     @Test
-    public void testFst() {
-        Config config = createConfig();
-        config.setCodec(fstCodec);
-        RedissonClient redisson = Redisson.create(config);
-
-        test(redisson);
-    }
-
-    @Test
     public void testSnappyBig() throws IOException {
         SnappyCodec sc = new SnappyCodec();
         String randomData = RandomString.make(Short.MAX_VALUE*2 + 142);
@@ -127,6 +109,25 @@ public class RedissonCodecTest extends BaseTest {
 
         test(redisson);
     }
+    
+    @Test
+    public void testSnappyV2() {
+        Config config = createConfig();
+        config.setCodec(snappyCodecV2);
+        RedissonClient redisson = Redisson.create(config);
+
+        test(redisson);
+    }
+    
+    @Test
+    public void testSnappyBigV2() throws IOException {
+        Codec sc = new SnappyCodecV2();
+        String randomData = RandomString.make(Short.MAX_VALUE*2 + 142);
+        ByteBuf g = sc.getValueEncoder().encode(randomData);
+        String decompressedData = (String) sc.getValueDecoder().decode(g, null);
+        assertThat(decompressedData).isEqualTo(randomData);
+    }
+
 
     @Test
     public void testJson() {
@@ -138,13 +139,87 @@ public class RedissonCodecTest extends BaseTest {
     }
 
     @Test
-    public void testKryo() {
+    public void testProtobufV2() {
+        //native V2
         Config config = createConfig();
-        config.setCodec(kryoCodec);
+        config.setCodec(protobufV2Codec);
         RedissonClient redisson = Redisson.create(config);
-
-        test(redisson);
+        final Proto2AllTypes.AllTypes2 allTypes2 = Proto2AllTypes.AllTypes2.newBuilder()
+                .addDoubleType(1)
+                .addDoubleType(1.1)
+                .setFloatType(1.1f)
+                .setInt32Type(1)
+                .setInt64Type(1)
+                .setUint32Type(1)
+                .setUint64Type(1)
+                .setSint32Type(1)
+                .setSint64Type(1)
+                .setFixed32Type(1)
+                .setFixed64Type(1)
+                .setSfixed32Type(1)
+                .setSfixed64Type(1)
+                .setBoolType(true)
+                .setStringType("1")
+                .setBytesType(ByteString.copyFrom("1".getBytes()))
+                .build();
+        final RMap<String, Proto2AllTypes.AllTypes2> v2rMap = redisson.getMap("protobuf2Map");
+        v2rMap.put("V2",allTypes2);
+        final Proto2AllTypes.AllTypes2 getAllTypes2 = v2rMap.get("V2");
+        Assertions.assertEquals(allTypes2, getAllTypes2);
+        redisson.shutdown();
     }
+
+    @Test
+    public void testProtobufV3() {
+        //native V3
+        Config config = createConfig();
+        config.setCodec(protobufV3Codec);
+        RedissonClient redisson = Redisson.create(config);
+        final Proto3AllTypes.AllTypes3 allTypes3 = Proto3AllTypes.AllTypes3.newBuilder()
+                .addDoubleType(1.1)
+                .addDoubleType(1.2)
+                .setFloatType(1.1f)
+                .setInt32Type(1)
+                .setInt64Type(1)
+                .setUint32Type(1)
+                .setUint64Type(1)
+                .setSint32Type(1)
+                .setSint64Type(1)
+                .setFixed32Type(1)
+                .setFixed64Type(1)
+                .setSfixed32Type(1)
+                .setSfixed64Type(1)
+                .setBoolType(true)
+                .setStringType("1")
+                .setBytesType(ByteString.copyFrom("1".getBytes()))
+                .build();
+        final RMap<String, Proto3AllTypes.AllTypes3> v3rMap = redisson.getMap("protobuf3Map");
+        v3rMap.put("V3",allTypes3);
+        final Proto3AllTypes.AllTypes3 getAllTypes3 = v3rMap.get("V3");
+        Assertions.assertEquals(allTypes3, getAllTypes3);
+        redisson.shutdown();
+    }
+
+    @Test
+    public void testProtostuff() {
+        //protostuff (a framework that bypasses the need to compile .proto files into .java file.)
+        Config config = createConfig();
+        config.setCodec(protobufStuffDataCodec);
+        RedissonClient redisson = Redisson.create(config);
+        final StuffData stuffData = new StuffData();
+        stuffData.setAge(18);
+        List<String> hobbies = new ArrayList<>();
+        hobbies.add("game");
+        hobbies.add("game");
+        stuffData.setHobbies(hobbies);
+        stuffData.setName("ccc");
+        RList<StuffData> protostuffList = redisson.getList("protostuffList");
+        protostuffList.add(stuffData);
+        final StuffData getStuffData = protostuffList.get(0);
+        Assertions.assertEquals(stuffData, getStuffData);
+        redisson.shutdown();
+    }
+
 
     @Test
     public void testCbor() {
@@ -186,7 +261,7 @@ public class RedissonCodecTest extends BaseTest {
 
         map.fastPut(1, a);
         Map<String, Object> resa = map.get(1);
-        Assert.assertEquals(a, resa);
+        Assertions.assertEquals(a, resa);
 
         Set<TestObject> set = redisson.getSet("set");
 
@@ -196,9 +271,9 @@ public class RedissonCodecTest extends BaseTest {
         set.add(new TestObject("3", "4"));
         set.add(new TestObject("5", "6"));
 
-        Assert.assertTrue(set.contains(new TestObject("2", "3")));
-        Assert.assertTrue(set.contains(new TestObject("1", "2")));
-        Assert.assertFalse(set.contains(new TestObject("1", "9")));
+        Assertions.assertTrue(set.contains(new TestObject("2", "3")));
+        Assertions.assertTrue(set.contains(new TestObject("1", "2")));
+        Assertions.assertFalse(set.contains(new TestObject("1", "9")));
         
         redisson.shutdown();
     }

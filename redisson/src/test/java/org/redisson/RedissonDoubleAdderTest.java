@@ -1,10 +1,10 @@
 package org.redisson;
 
 import org.assertj.core.api.Assertions;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.redisson.api.RDoubleAdder;
 
-public class RedissonDoubleAdderTest extends BaseTest {
+public class RedissonDoubleAdderTest extends RedisDockerTest {
 
     @Test
     public void testSum() {

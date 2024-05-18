@@ -1,65 +1,42 @@
 package org.redisson;
 
-import static org.awaitility.Awaitility.await;
-
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicBoolean;
-
-import org.junit.After;
-import org.junit.AfterClass;
-import org.junit.Assert;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
-import org.redisson.RedisRunner.RedisProcess;
+import com.github.dockerjava.api.model.PortBinding;
+import com.github.dockerjava.api.model.Ports;
+import org.awaitility.Awaitility;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+import org.redisson.api.RBucket;
 import org.redisson.api.RPatternTopic;
 import org.redisson.api.RTopic;
 import org.redisson.api.RedissonClient;
 import org.redisson.api.listener.BasePatternStatusListener;
 import org.redisson.api.listener.PatternMessageListener;
 import org.redisson.api.listener.PatternStatusListener;
+import org.redisson.api.redisnode.RedisCluster;
+import org.redisson.api.redisnode.RedisClusterMaster;
+import org.redisson.api.redisnode.RedisClusterSlave;
+import org.redisson.api.redisnode.RedisNodes;
+import org.redisson.client.codec.StringCodec;
 import org.redisson.config.Config;
+import org.redisson.config.SubscriptionMode;
+import org.redisson.connection.balancer.RandomLoadBalancer;
+import org.testcontainers.containers.ContainerState;
+import org.testcontainers.containers.GenericContainer;
 
-public class RedissonTopicPatternTest {
+import java.io.Serializable;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
-    @BeforeClass
-    public static void beforeClass() throws IOException, InterruptedException {
-        if (!RedissonRuntimeEnvironment.isTravis) {
-            RedisRunner.startDefaultRedisServerInstance();
-        }
-    }
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
-    @AfterClass
-    public static void afterClass() throws IOException, InterruptedException {
-        if (!RedissonRuntimeEnvironment.isTravis) {
-            RedisRunner.shutDownDefaultRedisServerInstance();
-        }
-    }
+public class RedissonTopicPatternTest extends RedisDockerTest {
 
-    @Before
-    public void before() throws IOException, InterruptedException {
-        if (RedissonRuntimeEnvironment.isTravis) {
-            RedisRunner.startDefaultRedisServerInstance();
-        }
-    }
-
-    @After
-    public void after() throws InterruptedException {
-        if (RedissonRuntimeEnvironment.isTravis) {
-            RedisRunner.shutDownDefaultRedisServerInstance();
-        }
-    }
-
-    public static class Message {
+    public static class Message implements Serializable {
 
         private String name;
 
@@ -98,59 +75,168 @@ public class RedissonTopicPatternTest {
     }
 
     @Test
+    public void testCluster() {
+        testInCluster(redisson -> {
+            RedisCluster nodes = redisson.getRedisNodes(RedisNodes.CLUSTER);
+            for (RedisClusterSlave slave : nodes.getSlaves()) {
+                slave.setConfig("notify-keyspace-events", "Eg");
+            }
+            for (RedisClusterMaster master : nodes.getMasters()) {
+                master.setConfig("notify-keyspace-events", "Eg");
+            }
+
+            AtomicInteger subscribeCounter = new AtomicInteger();
+            RPatternTopic topic = redisson.getPatternTopic("__keyevent@*", StringCodec.INSTANCE);
+            topic.addListener(new PatternStatusListener() {
+                @Override
+                public void onPSubscribe(String pattern) {
+                    subscribeCounter.incrementAndGet();
+                }
+
+                @Override
+                public void onPUnsubscribe(String pattern) {
+                    System.out.println("onPUnsubscribe: " + pattern);
+                }
+            });
+
+            AtomicInteger counter = new AtomicInteger();
+
+            PatternMessageListener<String> listener = (pattern, channel, msg) -> {
+                counter.incrementAndGet();
+            };
+            topic.addListener(String.class, listener);
+
+            for (int i = 0; i < 10; i++) {
+                redisson.getBucket("" + i).set(i);
+                redisson.getBucket("" + i).delete();
+                try {
+                    Thread.sleep(7);
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+
+            Awaitility.await().atMost(Duration.ofSeconds(2)).until(() -> counter.get() > 9);
+            assertThat(subscribeCounter.get()).isEqualTo(1);
+
+            for (RedisClusterSlave slave : nodes.getSlaves()) {
+                slave.setConfig("notify-keyspace-events", "");
+            }
+            for (RedisClusterMaster master : nodes.getMasters()) {
+                master.setConfig("notify-keyspace-events", "");
+            }
+
+            topic.removeAllListeners();
+        });
+    }
+
+    @Test
+    public void testNonEventMessagesInCluster() {
+        testInCluster(redisson -> {
+            AtomicInteger subscribeCounter = new AtomicInteger();
+            RPatternTopic topic = redisson.getPatternTopic("my*", StringCodec.INSTANCE);
+            topic.addListener(new PatternStatusListener() {
+                @Override
+                public void onPSubscribe(String pattern) {
+                    subscribeCounter.incrementAndGet();
+                }
+
+                @Override
+                public void onPUnsubscribe(String pattern) {
+                    System.out.println("onPUnsubscribe: " + pattern);
+                }
+            });
+
+            AtomicInteger counter = new AtomicInteger();
+
+            PatternMessageListener<String> listener = (pattern, channel, msg) -> {
+                counter.incrementAndGet();
+            };
+            topic.addListener(String.class, listener);
+
+            for (int i = 0; i < 100; i++) {
+                redisson.getTopic("my" + i).publish(123);
+            }
+
+            Awaitility.await().atMost(Duration.ofSeconds(2)).until(() -> counter.get() == 100);
+            assertThat(subscribeCounter.get()).isEqualTo(1);
+
+            topic.removeAllListeners();
+        });
+    }
+
+    @Test
+    public void testMultiType() throws InterruptedException {
+        RPatternTopic topic1 = redisson.getPatternTopic("topic1.*");
+        AtomicInteger str = new AtomicInteger(); 
+        topic1.addListener(String.class, (pattern, channel, msg) -> {
+            str.incrementAndGet();
+        });
+        AtomicInteger i = new AtomicInteger();
+        topic1.addListener(Integer.class, (pattern, channel, msg) -> {
+            i.incrementAndGet();
+        });
+        
+        redisson.getTopic("topic1.str").publish("123");
+        redisson.getTopic("topic1.int").publish(123);
+        
+        Thread.sleep(500);
+        
+        Assertions.assertEquals(1, i.get());
+        Assertions.assertEquals(1, str.get());
+        topic1.removeAllListeners();
+    }
+
+    @Test
     public void testUnsubscribe() throws InterruptedException {
         final CountDownLatch messageRecieved = new CountDownLatch(1);
 
-        RedissonClient redisson = BaseTest.createInstance();
-        RPatternTopic<Message> topic1 = redisson.getPatternTopic("topic1.*");
-        int listenerId = topic1.addListener((pattern, channel, msg) -> {
-            Assert.fail();
+        RPatternTopic topic1 = redisson.getPatternTopic("topic1.*");
+        int listenerId = topic1.addListener(Message.class, (pattern, channel, msg) -> {
+            Assertions.fail();
         });
-        topic1.addListener((pattern, channel, msg) -> {
-            Assert.assertEquals("topic1.*", pattern);
-            Assert.assertEquals("topic1.t3", channel);
-            Assert.assertEquals(new Message("123"), msg);
+        topic1.addListener(Message.class, (pattern, channel, msg) -> {
+            Assertions.assertTrue(pattern.equals("topic1.*"));
+            Assertions.assertTrue(channel.equals("topic1.t3"));
+            Assertions.assertEquals(new Message("123"), msg);
             messageRecieved.countDown();
         });
         topic1.removeListener(listenerId);
 
-//        topic1 = redisson.getPatternTopic("topic1.*");
         redisson.getTopic("topic1.t3").publish(new Message("123"));
 
-        Assert.assertTrue(messageRecieved.await(5, TimeUnit.SECONDS));
-
-        redisson.shutdown();
+        Assertions.assertTrue(messageRecieved.await(5, TimeUnit.SECONDS));
+        topic1.removeAllListeners();
     }
 
     @Test
     public void testLazyUnsubscribe() throws InterruptedException {
         final CountDownLatch messageRecieved = new CountDownLatch(1);
 
-        RedissonClient redisson1 = BaseTest.createInstance();
-        RPatternTopic<Message> topic1 = redisson1.getPatternTopic("topic.*");
-        int listenerId = topic1.addListener((pattern, channel, msg) -> {
-            Assert.fail();
+        RPatternTopic topic1 = redisson.getPatternTopic("topic.*");
+        int listenerId = topic1.addListener(Message.class, (pattern, channel, msg) -> {
+            Assertions.fail();
         });
 
         Thread.sleep(1000);
         topic1.removeListener(listenerId);
         Thread.sleep(1000);
 
-        RedissonClient redisson2 = BaseTest.createInstance();
-        RPatternTopic<Message> topic2 = redisson2.getPatternTopic("topic.*");
-        topic2.addListener((pattern, channel, msg) -> {
-            Assert.assertEquals("topic.*", pattern);
-            Assert.assertEquals("topic.t1", channel);
-            Assert.assertEquals(new Message("123"), msg);
+        RedissonClient redisson2 = createInstance();
+        RPatternTopic topic2 = redisson2.getPatternTopic("topic.*");
+        topic2.addListener(Message.class, (pattern, channel, msg) -> {
+            Assertions.assertTrue(pattern.equals("topic.*"));
+            Assertions.assertTrue(channel.equals("topic.t1"));
+            Assertions.assertEquals(new Message("123"), msg);
             messageRecieved.countDown();
         });
 
-        RTopic<Message> topic3 = redisson2.getTopic("topic.t1");
+        RTopic topic3 = redisson2.getTopic("topic.t1");
         topic3.publish(new Message("123"));
 
-        messageRecieved.await();
+        Assertions.assertTrue(messageRecieved.await(5, TimeUnit.SECONDS));
 
-        redisson1.shutdown();
+        topic1.removeAllListeners();
         redisson2.shutdown();
     }
 
@@ -159,76 +245,71 @@ public class RedissonTopicPatternTest {
         final CountDownLatch messageRecieved = new CountDownLatch(5);
 
         final CountDownLatch statusRecieved = new CountDownLatch(1);
-        RedissonClient redisson1 = BaseTest.createInstance();
-        RPatternTopic<Message> topic1 = redisson1.getPatternTopic("topic.*");
+        RPatternTopic topic1 = redisson.getPatternTopic("topic.*");
         topic1.addListener(new BasePatternStatusListener() {
             @Override
             public void onPSubscribe(String pattern) {
-                Assert.assertEquals("topic.*", pattern);
+                Assertions.assertEquals("topic.*", pattern);
                 statusRecieved.countDown();
             }
         });
-        topic1.addListener((pattern, channel, msg) -> {
-            Assert.assertEquals(new Message("123"), msg);
+        topic1.addListener(Message.class, (pattern, channel, msg) -> {
+            Assertions.assertEquals(new Message("123"), msg);
             messageRecieved.countDown();
         });
 
-        RedissonClient redisson2 = BaseTest.createInstance();
-        RTopic<Message> topic2 = redisson2.getTopic("topic.t1");
-        topic2.addListener((channel, msg) -> {
-            Assert.assertEquals(new Message("123"), msg);
+        RedissonClient redisson2 = createInstance();
+        RTopic topic2 = redisson2.getTopic("topic.t1");
+        topic2.addListener(Message.class, (channel, msg) -> {
+            Assertions.assertEquals(new Message("123"), msg);
             messageRecieved.countDown();
         });
         topic2.publish(new Message("123"));
         topic2.publish(new Message("123"));
 
-        RTopic<Message> topicz = redisson2.getTopic("topicz.t1");
+        RTopic topicz = redisson2.getTopic("topicz.t1");
         topicz.publish(new Message("789")); // this message doesn't get
                                             // delivered, and would fail the
                                             // assertion
 
-        RTopic<Message> topict2 = redisson2.getTopic("topic.t2");
+        RTopic topict2 = redisson2.getTopic("topic.t2");
         topict2.publish(new Message("123"));
 
         statusRecieved.await();
-        Assert.assertTrue(messageRecieved.await(5, TimeUnit.SECONDS));
+        Assertions.assertTrue(messageRecieved.await(5, TimeUnit.SECONDS));
 
-        redisson1.shutdown();
+        topic1.removeAllListeners();
         redisson2.shutdown();
     }
 
     @Test
-    public void testListenerRemove() throws InterruptedException {
-        RedissonClient redisson1 = BaseTest.createInstance();
-        RPatternTopic<Message> topic1 = redisson1.getPatternTopic("topic.*");
+    public void testListenerRemove() {
+        RPatternTopic topic1 = redisson.getPatternTopic("topic.*");
         final CountDownLatch l = new CountDownLatch(1);
         topic1.addListener(new BasePatternStatusListener() {
             @Override
             public void onPUnsubscribe(String pattern) {
-                Assert.assertEquals("topic.*", pattern);
+                Assertions.assertEquals("topic.*", pattern);
                 l.countDown();
             }
         });
-        int id = topic1.addListener((pattern, channel, msg) -> {
-            Assert.fail();
+        int id = topic1.addListener(Message.class, (pattern, channel, msg) -> {
+            Assertions.fail();
         });
 
-        RedissonClient redisson2 = BaseTest.createInstance();
-        RTopic<Message> topic2 = redisson2.getTopic("topic.t1");
+        RedissonClient redisson2 = createInstance();
+        RTopic topic2 = redisson2.getTopic("topic.t1");
         topic1.removeListener(id);
         topic2.publish(new Message("123"));
 
-        redisson1.shutdown();
+        topic1.removeAllListeners();
         redisson2.shutdown();
     }
 
     @Test
     public void testConcurrentTopic() throws Exception {
-        Config config = BaseTest.createConfig();
-        RedissonClient redisson = Redisson.create(config);
-        
-        int threads = 30;
-        int loops = 50000;
+        int threads = 16;
+        int loops = 25000;
         
         ExecutorService executor = Executors.newFixedThreadPool(threads);
         List<Future<?>> futures = new ArrayList<>(); 
@@ -239,7 +320,7 @@ public class RedissonTopicPatternTest {
                 @Override
                 public void run() {
                     for (int j = 0; j < loops; j++) {
-                        RPatternTopic<String> t = redisson.getPatternTopic("PUBSUB*");
+                        RPatternTopic t = redisson.getPatternTopic("PUBSUB*");
                         int listenerId = t.addListener(new PatternStatusListener() {
                             @Override
                             public void onPUnsubscribe(String channel) {
@@ -258,47 +339,108 @@ public class RedissonTopicPatternTest {
             futures.add(s);
         }
         executor.shutdown();
-        Assert.assertTrue(executor.awaitTermination(threads * loops * 1000, TimeUnit.SECONDS));
+        Assertions.assertTrue(executor.awaitTermination(60, TimeUnit.SECONDS));
 
         for (Future<?> future : futures) {
             future.get();
         }
-        
-        redisson.shutdown();
+
+        RPatternTopic t = redisson.getPatternTopic("PUBSUB*");
+        t.removeAllListeners();
     }
 
     @Test
-    public void testReattach() throws InterruptedException, IOException, ExecutionException, TimeoutException {
-        RedisProcess runner = new RedisRunner()
-                .nosave()
-                .randomDir()
-                .randomPort()
-                .run();
-        
-        Config config = new Config();
-        config.useSingleServer().setAddress(runner.getRedisServerAddressAndPort());
+    public void testReattachInClusterSlave() {
+        testReattachInCluster(SubscriptionMode.SLAVE);
+    }
+
+    @Test
+    public void testReattachInClusterMaster() {
+        testReattachInCluster(SubscriptionMode.MASTER);
+    }
+
+    private void testReattachInCluster(SubscriptionMode subscriptionMode) {
+        withNewCluster((nds, instance) -> {
+            Config config = instance.getConfig();
+            config.useClusterServers()
+                    .setSubscriptionMode(subscriptionMode);
+            RedissonClient redisson = Redisson.create(config);
+
+            RedisCluster nodes = redisson.getRedisNodes(RedisNodes.CLUSTER);
+            for (RedisClusterSlave slave : nodes.getSlaves()) {
+                slave.setConfig("notify-keyspace-events", "KgE$");
+            }
+            for (RedisClusterMaster master : nodes.getMasters()) {
+                master.setConfig("notify-keyspace-events", "KgE$");
+            }
+
+            AtomicInteger executions = new AtomicInteger();
+
+            RPatternTopic topic = redisson.getPatternTopic("__keyevent@*:del", StringCodec.INSTANCE);
+            topic.addListener(String.class, new PatternMessageListener<String>() {
+                @Override
+                public void onMessage(CharSequence pattern, CharSequence channel, String msg) {
+                    executions.incrementAndGet();
+                }
+            });
+
+            List<ContainerState> masters = getMasterNodes(nds);
+            stop(masters.get(0));
+
+            try {
+                Thread.sleep(40000);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+
+            nodes = redisson.getRedisNodes(RedisNodes.CLUSTER);
+            for (RedisClusterSlave slave : nodes.getSlaves()) {
+                slave.setConfig("notify-keyspace-events", "KgE$");
+            }
+            for (RedisClusterMaster master : nodes.getMasters()) {
+                master.setConfig("notify-keyspace-events", "KgE$");
+            }
+
+            for (int i = 0; i < 100; i++) {
+                RBucket<Object> b = redisson.getBucket("test" + i);
+                b.set(i);
+                b.delete();
+            }
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+            assertThat(executions.get()).isEqualTo(100);
+
+            redisson.shutdown();
+        });
+
+
+    }
+
+    @Test
+    public void testReattach() throws InterruptedException {
+        GenericContainer<?> redis = createRedis();
+        redis.start();
+
+        Config config = createConfig(redis);
         RedissonClient redisson = Redisson.create(config);
         
         final AtomicBoolean executed = new AtomicBoolean();
         
-        RPatternTopic<Integer> topic = redisson.getPatternTopic("topic*");
-        topic.addListener(new PatternMessageListener<Integer>() {
+        RPatternTopic topic = redisson.getPatternTopic("topic*");
+        topic.addListener(Integer.class, new PatternMessageListener<Integer>() {
             @Override
-            public void onMessage(String pattern, String channel, Integer msg) {
+            public void onMessage(CharSequence pattern, CharSequence channel, Integer msg) {
                 if (msg == 1) {
                     executed.set(true);
                 }
             }
         });
-        
-        runner.stop();
 
-        runner = new RedisRunner()
-                .port(runner.getRedisServerPort())
-                .nosave()
-                .randomDir()
-                .run();
-        
+        restart(redis);
+
         Thread.sleep(1000);
 
         redisson.getTopic("topic1").publish(1);
@@ -306,7 +448,7 @@ public class RedissonTopicPatternTest {
         await().atMost(5, TimeUnit.SECONDS).untilTrue(executed);
         
         redisson.shutdown();
-        runner.stop();
+        redis.stop();
     }
     
 }

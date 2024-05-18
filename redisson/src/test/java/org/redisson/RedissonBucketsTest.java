@@ -1,31 +1,127 @@
 package org.redisson;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import org.junit.jupiter.api.Test;
+import org.redisson.api.NameMapper;
+import org.redisson.api.RBucket;
+import org.redisson.api.RBuckets;
+import org.redisson.api.RedissonClient;
+import org.redisson.client.codec.StringCodec;
+import org.redisson.config.Config;
+import org.redisson.config.ReadMode;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
-import org.junit.Assert;
-import org.junit.Test;
-import org.redisson.api.RBucket;
+import static org.assertj.core.api.Assertions.assertThat;
 
-public class RedissonBucketsTest extends BaseTest {
+public class RedissonBucketsTest extends RedisDockerTest {
 
     @Test
+    public void testGetInClusterNameMapper() {
+        testInCluster(client -> {
+            Config config = client.getConfig();
+            config.useClusterServers()
+                    .setReadMode(ReadMode.MASTER)
+                    .setNameMapper(new NameMapper() {
+                        @Override
+                        public String map(String name) {
+                            return "test::" + name;
+                        }
+
+                        @Override
+                        public String unmap(String name) {
+                            return name.replace("test::", "");
+                        }
+                    });
+
+            RedissonClient redisson = Redisson.create(config);
+
+            int size = 10000;
+            Map<String, Integer> map = new HashMap<>();
+            for (int i = 0; i < 10; i++) {
+                map.put("test" + i, i);
+            }
+            for (int i = 10; i < size; i++) {
+                map.put("test" + i + "{" + (i % 100) + "}", i);
+            }
+
+            redisson.getBuckets().set(map);
+
+            Set<String> queryKeys = new HashSet<>(map.keySet());
+            queryKeys.add("test_invalid");
+            Map<String, Integer> buckets = redisson.getBuckets().get(queryKeys.toArray(new String[map.size()]));
+
+            assertThat(buckets).isEqualTo(map);
+
+            for (int i = 0; i < 10; i++) {
+                assertThat(redisson.getBucket("test" + i).get()).isEqualTo(i);
+            }
+
+            redisson.shutdown();
+        });
+    }
+
+    @Test
+    public void testGetInCluster() {
+        testInCluster(client -> {
+            Config config = client.getConfig();
+            config.useClusterServers()
+                    .setReadMode(ReadMode.MASTER);
+            RedissonClient redisson = Redisson.create(config);
+
+            int size = 10000;
+            Map<String, Integer> map = new HashMap<>();
+            for (int i = 0; i < 10; i++) {
+                map.put("test" + i, i);
+            }
+            for (int i = 10; i < size; i++) {
+                map.put("test" + i + "{" + (i%100)+ "}", i);
+            }
+
+            redisson.getBuckets().set(map);
+
+            Set<String> queryKeys = new HashSet<>(map.keySet());
+            queryKeys.add("test_invalid");
+            Map<String, Integer> buckets = redisson.getBuckets().get(queryKeys.toArray(new String[map.size()]));
+
+            assertThat(buckets).isEqualTo(map);
+
+            redisson.shutdown();
+        });
+    }
+    
+    @Test
     public void testGet() {
-        RBucket<String> bucket1 = redisson.getBucket("test1");
-        bucket1.set("someValue1");
-        RBucket<String> bucket3 = redisson.getBucket("test3");
-        bucket3.set("someValue3");
+        redisson.getBucket("test1").set("someValue1");
+        redisson.getBucket("test2").delete();
+        redisson.getBucket("test3").set("someValue3");
+        redisson.getBucket("test4").delete();
 
         Map<String, String> result = redisson.getBuckets().get("test1", "test2", "test3", "test4");
         Map<String, String> expected = new HashMap<String, String>();
         expected.put("test1", "someValue1");
         expected.put("test3", "someValue3");
 
-        Assert.assertEquals(expected, result);
+        assertThat(expected).isEqualTo(result);
     }
-    
+
+    @Test
+    public void testCodec() {
+        RBuckets buckets = redisson.getBuckets(StringCodec.INSTANCE);
+        Map<String, String> items = buckets.get("buckets:A", "buckets:B", "buckets:C");
+
+        items.put("buckets:A", "XYZ");
+        items.put("buckets:B", "OPM");
+        items.put("buckets:C", "123");
+
+        buckets.set(items);
+        items = buckets.get("buckets:A", "buckets:B", "buckets:C");
+        assertThat(3).isEqualTo(items.size());
+        assertThat(items.get("buckets:A")).isEqualTo("XYZ");
+    }
+
     @Test
     public void testSet() {
         Map<String, Integer> buckets = new HashMap<String, Integer>();

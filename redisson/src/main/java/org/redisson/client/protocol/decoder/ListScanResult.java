@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,10 +15,9 @@
  */
 package org.redisson.client.protocol.decoder;
 
-import java.net.InetSocketAddress;
 import java.util.List;
 
-import org.redisson.RedisClientResult;
+import org.redisson.ScanResult;
 import org.redisson.client.RedisClient;
 
 /**
@@ -27,21 +26,23 @@ import org.redisson.client.RedisClient;
  *
  * @param <V> value type
  */
-public class ListScanResult<V> implements RedisClientResult {
+public class ListScanResult<V> implements ScanResult<V> {
 
-    private final Long pos;
+    private final String pos;
     private final List<V> values;
     private RedisClient client;
 
-    public ListScanResult(Long pos, List<V> values) {
+    public ListScanResult(String pos, List<V> values) {
         this.pos = pos;
         this.values = values;
     }
 
-    public Long getPos() {
+    @Override
+    public String getPos() {
         return pos;
     }
 
+    @Override
     public List<V> getValues() {
         return values;
     }
@@ -51,8 +52,17 @@ public class ListScanResult<V> implements RedisClientResult {
         this.client = client;
     }
 
+    @Override
     public RedisClient getRedisClient() {
         return client;
     }
 
+    @Override
+    public String toString() {
+        return "ListScanResult{" +
+                "pos=" + pos +
+                ", values=" + values +
+                ", client=" + client +
+                '}';
+    }
 }

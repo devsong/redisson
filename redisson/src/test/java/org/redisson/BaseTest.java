@@ -1,54 +1,34 @@
 package org.redisson;
 
 import java.io.IOException;
-import org.junit.After;
-import org.junit.AfterClass;
-import org.junit.Before;
-import org.junit.BeforeClass;
+
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.redisson.api.RedissonClient;
 import org.redisson.config.Config;
 
+@Deprecated
 public abstract class BaseTest {
     
-    protected RedissonClient redisson;
-    protected static RedissonClient defaultRedisson;
+    protected static RedissonClient redisson;
 
-    @BeforeClass
+    @BeforeAll
     public static void beforeClass() throws IOException, InterruptedException {
-        if (!RedissonRuntimeEnvironment.isTravis) {
-            RedisRunner.startDefaultRedisServerInstance();
-            defaultRedisson = createInstance();
-        }
+        RedisRunner.startDefaultRedisServerInstance();
+        redisson = createInstance();
     }
 
-    @AfterClass
-    public static void afterClass() throws IOException, InterruptedException {
-        if (!RedissonRuntimeEnvironment.isTravis) {
-            defaultRedisson.shutdown();
-            RedisRunner.shutDownDefaultRedisServerInstance();
-        }
+    @AfterAll
+    public static void afterClass() throws InterruptedException {
+        redisson.shutdown();
+        RedisRunner.shutDownDefaultRedisServerInstance();
     }
 
-    @Before
+    @BeforeEach
     public void before() throws IOException, InterruptedException {
-        if (RedissonRuntimeEnvironment.isTravis) {
-            RedisRunner.startDefaultRedisServerInstance();
-            redisson = createInstance();
-        } else {
-            if (redisson == null) {
-                redisson = defaultRedisson;
-            }
-            if (flushBetweenTests()) {
-                redisson.getKeys().flushall();
-            }
-        }
-    }
-
-    @After
-    public void after() throws InterruptedException {
-        if (RedissonRuntimeEnvironment.isTravis) {
-            redisson.shutdown();
-            RedisRunner.shutDownDefaultRedisServerInstance();
+        if (flushBetweenTests()) {
+            redisson.getKeys().flushall();
         }
     }
 

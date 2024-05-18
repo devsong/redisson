@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,8 +15,8 @@
  */
 package org.redisson.api;
 
-import java.util.Collection;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 
 /**
  * 
@@ -24,6 +24,33 @@ import java.util.concurrent.TimeUnit;
  *
  */
 public interface RKeys extends RKeysAsync {
+
+    /**
+     * Get keys using iterator with defined <code>limit</code>.
+     * Keys are traversed with SCAN operation.
+     *
+     * @param limit - limit of keys amount
+     * @return Iterable object
+     */
+    Iterable<String> getKeysWithLimit(int limit);
+
+    /**
+     * Get keys using iterator with defined <code>limit</code>.
+     * Keys are traversed with SCAN operation.
+     * <p>
+     *  Supported glob-style patterns:
+     *  <p>
+     *    h?llo subscribes to hello, hallo and hxllo
+     *    <p>
+     *    h*llo subscribes to hllo and heeeello
+     *    <p>
+     *    h[ae]llo subscribes to hello and hallo, but not hillo
+     *
+     * @param limit - limit of keys amount
+     * @param pattern - match pattern
+     * @return Iterable object
+     */
+    Iterable<String> getKeysWithLimit(String pattern, int limit);
 
     /**
      * Move object to another database
@@ -35,14 +62,26 @@ public interface RKeys extends RKeysAsync {
     boolean move(String name, int database);
     
     /**
-     * Transfer an object from source Redis instance to destination Redis instance
+     * Transfer object from source Redis instance to destination Redis instance
      *
      * @param name of object
      * @param host - destination host
      * @param port - destination port
      * @param database - destination database
+     * @param timeout - maximum idle time in any moment of the communication with the destination instance in milliseconds
      */
-    void migrate(String name, String host, int port, int database);
+    void migrate(String name, String host, int port, int database, long timeout);
+    
+    /**
+     * Copy object from source Redis instance to destination Redis instance
+     *
+     * @param name of object
+     * @param host - destination host
+     * @param port - destination port
+     * @param database - destination database
+     * @param timeout - maximum idle time in any moment of the communication with the destination instance in milliseconds
+     */
+    void copy(String name, String host, int port, int database, long timeout);
     
     /**
      * Set a timeout for object. After the timeout has expired,
@@ -171,33 +210,84 @@ public interface RKeys extends RKeysAsync {
      * @return Iterable object
      */
     Iterable<String> getKeysByPattern(String pattern, int count);
-    
+
     /**
-     * Get all keys using iterator. Keys traversing with SCAN operation
+     * Get all keys using iterator. Keys traversing with SCAN operation. 
+     * Each SCAN operation loads up to <code>10</code> keys per request. 
      *
      * @return Iterable object
      */
     Iterable<String> getKeys();
 
     /**
+     * Get all keys using iterator. Keys traversing with SCAN operation.
+     * Each SCAN operation loads up to <code>count</code> keys per request.
+     *
+     * @param count - keys loaded per request to Redis
+     * @return Iterable object
+     */
+    Iterable<String> getKeys(int count);
+
+    /**
+     * Get all keys by pattern using Stream. 
+     * Keys traversed with SCAN operation. Each SCAN operation loads 
+     * up to <b>10</b> keys per request. 
+     * <p>
+     *  Supported glob-style patterns:
+     *  <p>
+     *    h?llo subscribes to hello, hallo and hxllo
+     *    <p>
+     *    h*llo subscribes to hllo and heeeello
+     *    <p>
+     *    h[ae]llo subscribes to hello and hallo, but not hillo
+     * 
+     * @param pattern - match pattern
+     * @return Iterable object
+     */
+    Stream<String> getKeysStreamByPattern(String pattern);
+
+    /**
+     * Get all keys by pattern using Stream. 
+     * Keys traversed with SCAN operation. Each SCAN operation loads 
+     * up to <code>count</code> keys per request. 
+     * <p>
+     *  Supported glob-style patterns:
+     *  <p>
+     *    h?llo subscribes to hello, hallo and hxllo
+     *    <p>
+     *    h*llo subscribes to hllo and heeeello
+     *    <p>
+     *    h[ae]llo subscribes to hello and hallo, but not hillo
+     *
+     * @param pattern - match pattern
+     * @param count - keys loaded per request to Redis
+     * @return Iterable object
+     */
+    Stream<String> getKeysStreamByPattern(String pattern, int count);
+    
+    /**
+     * Get all keys using Stream. Keys traversing with SCAN operation. 
+     * Each SCAN operation loads up to <code>10</code> keys per request. 
+     *
+     * @return Iterable object
+     */
+    Stream<String> getKeysStream();
+
+    /**
+     * Get all keys using Stream. Keys traversing with SCAN operation.
+     * Each SCAN operation loads up to <code>count</code> keys per request.
+     *
+     * @param count - keys loaded per request to Redis
+     * @return Iterable object
+     */
+    Stream<String> getKeysStream(int count);
+    
+    /**
      * Get random key
      *
      * @return random key
      */
     String randomKey();
-
-    /**
-     * Find keys by key search pattern at once using KEYS command.
-     *
-     *  Supported glob-style patterns:
-     *    h?llo subscribes to hello, hallo and hxllo
-     *    h*llo subscribes to hllo and heeeello
-     *    h[ae]llo subscribes to hello and hallo, but not hillo
-     *
-     * @param pattern - match pattern
-     * @return collection of keys
-     */
-    Collection<String> findKeysByPattern(String pattern);
 
     /**
      * Delete multiple objects by a key pattern.
@@ -220,7 +310,7 @@ public interface RKeys extends RKeysAsync {
      * @param objects of Redisson
      * @return number of removed keys
      */
-    long delete(RObject ... objects);
+    long delete(RObject... objects);
     
     /**
      * Delete multiple objects by name
@@ -228,7 +318,7 @@ public interface RKeys extends RKeysAsync {
      * @param keys - object names
      * @return number of removed keys
      */
-    long delete(String ... keys);
+    long delete(String... keys);
 
     /**
      * Delete multiple objects by name.
@@ -239,7 +329,7 @@ public interface RKeys extends RKeysAsync {
      * @param keys of objects
      * @return number of removed keys
      */
-    long unlink(String ... keys);
+    long unlink(String... keys);
     
     /**
      * Returns the number of keys in the currently-selected database
@@ -247,6 +337,11 @@ public interface RKeys extends RKeysAsync {
      * @return count of keys
      */
     long count();
+
+    /**
+     * Swap two databases.
+     */
+    void swapdb(int db1, int db2);
 
     /**
      * Delete all keys of currently selected database
@@ -275,5 +370,28 @@ public interface RKeys extends RKeysAsync {
      * 
      */
     void flushallParallel();
+
+    /**
+     * Adds global object event listener
+     * which is invoked for each Redisson object.
+     *
+     * @see org.redisson.api.listener.TrackingListener
+     * @see org.redisson.api.listener.SetObjectListener
+     * @see org.redisson.api.listener.NewObjectListener
+     * @see org.redisson.api.listener.FlushListener
+     * @see org.redisson.api.ExpiredObjectListener
+     * @see org.redisson.api.DeletedObjectListener
+     *
+     * @param listener object event listener
+     * @return listener id
+     */
+    int addListener(ObjectListener listener);
+
+    /**
+     * Removes global object event listener
+     *
+     * @param listenerId - listener id
+     */
+    void removeListener(int listenerId);
 
 }

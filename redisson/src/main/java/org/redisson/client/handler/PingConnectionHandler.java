@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,18 +15,20 @@
  */
 package org.redisson.client.handler;
 
-import java.util.concurrent.TimeUnit;
-
-import org.redisson.api.RFuture;
-import org.redisson.client.RedisClientConfig;
-import org.redisson.client.RedisConnection;
-import org.redisson.client.protocol.RedisCommands;
-
 import io.netty.channel.ChannelHandler.Sharable;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
-import io.netty.util.Timeout;
-import io.netty.util.TimerTask;
+import org.redisson.api.RFuture;
+import org.redisson.client.*;
+import org.redisson.client.codec.StringCodec;
+import org.redisson.client.protocol.CommandData;
+import org.redisson.client.protocol.RedisCommands;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 
@@ -36,6 +38,8 @@ import io.netty.util.TimerTask;
 @Sharable
 public class PingConnectionHandler extends ChannelInboundHandlerAdapter {
 
+    private static final Logger log = LoggerFactory.getLogger(PingConnectionHandler.class);
+    
     private final RedisClientConfig config;
 
     public PingConnectionHandler(RedisClientConfig config) {
@@ -44,25 +48,79 @@ public class PingConnectionHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
-        sendPing(ctx);
+        RedisConnection connection = RedisConnection.getFrom(ctx.channel());
+        connection.getConnectionPromise().whenComplete((res, e) -> {
+            if (e == null) {
+                sendPing(ctx);
+            }
+        });
         ctx.fireChannelActive();
     }
 
-    protected void sendPing(final ChannelHandlerContext ctx) {
+    private void sendPing(ChannelHandlerContext ctx) {
         RedisConnection connection = RedisConnection.getFrom(ctx.channel());
-        final RFuture<Object> future = connection.async(RedisCommands.PING);
-        
-        config.getTimer().newTimeout(new TimerTask() {
-            @Override
-            public void run(Timeout timeout) throws Exception {
-                if (future.cancel(false)) {
+        if (connection.getRedisClient().isShutdown()) {
+            return;
+        }
+
+        RFuture<String> future;
+        CommandData<?, ?> currentCommand = connection.getCurrentCommand();
+        if (connection.getUsage() == 0 && (currentCommand == null || !currentCommand.isBlockingCommand())) {
+            int timeout = Math.max(config.getCommandTimeout(), config.getPingConnectionInterval() / 2);
+            future = connection.async(timeout, StringCodec.INSTANCE, RedisCommands.PING);
+        } else {
+            future = null;
+        }
+
+        config.getTimer().newTimeout(timeout -> {
+            if (connection.isClosed() || ctx.isRemoved()) {
+                return;
+            }
+
+            CommandData<?, ?> cd = connection.getCurrentCommand();
+            if (cd != null && cd.isBlockingCommand()) {
+                sendPing(ctx);
+                return;
+            }
+
+            if (connection.getUsage() == 0
+                    && future != null
+                        && (future.cancel(false) || cause(future) != null)) {
+
+                Throwable cause = cause(future);
+
+                if (!(cause instanceof RedisRetryException)) {
+                    if (!future.isCancelled()) {
+                        log.error("Unable to send PING command over channel: {}", ctx.channel(), cause);
+                    }
+
+                    if (connection.getRedisClient().isShutdown()) {
+                        return;
+                    }
+
+                    log.debug("channel: {} closed due to PING response timeout set in {} ms", ctx.channel(), config.getPingConnectionInterval());
                     ctx.channel().close();
+                    connection.getRedisClient().getConfig().getFailedNodeDetector().onPingFailed();
                 } else {
+                    connection.getRedisClient().getConfig().getFailedNodeDetector().onPingSuccessful();
                     sendPing(ctx);
                 }
+            } else {
+                connection.getRedisClient().getConfig().getFailedNodeDetector().onPingSuccessful();
+                sendPing(ctx);
             }
         }, config.getPingConnectionInterval(), TimeUnit.MILLISECONDS);
     }
 
+    protected Throwable cause(RFuture<?> future) {
+        try {
+            future.toCompletableFuture().getNow(null);
+            return null;
+        } catch (CompletionException ex2) {
+            return ex2.getCause();
+        } catch (CancellationException ex1) {
+            return ex1;
+        }
+    }
 
 }

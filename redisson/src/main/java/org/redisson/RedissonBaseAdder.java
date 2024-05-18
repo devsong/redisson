@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,23 +15,19 @@
  */
 package org.redisson;
 
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-
 import org.redisson.api.RFuture;
 import org.redisson.api.RSemaphore;
 import org.redisson.api.RTopic;
 import org.redisson.api.RedissonClient;
-import org.redisson.api.listener.MessageListener;
-import org.redisson.client.codec.LongCodec;
+import org.redisson.client.codec.StringCodec;
 import org.redisson.command.CommandAsyncExecutor;
-import org.redisson.misc.RPromise;
-import org.redisson.misc.RedissonPromise;
+import org.redisson.connection.AdderEntry;
+import org.redisson.misc.CompletableFutureWrapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import io.netty.util.concurrent.Future;
-import io.netty.util.concurrent.FutureListener;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 
@@ -40,140 +36,68 @@ import io.netty.util.concurrent.FutureListener;
  */
 public abstract class RedissonBaseAdder<T extends Number> extends RedissonExpirable {
 
-    private class ResetListener implements FutureListener<Long> {
-        
-        private final RPromise<Void> result;
-
-        private ResetListener(RPromise<Void> result) {
-            this.result = result;
-        }
-
-        @Override
-        public void operationComplete(Future<Long> future) throws Exception {
-            if (!future.isSuccess()) {
-                result.tryFailure(future.cause());
-                return;
-            }
-            
-            acquireAsync(future.getNow().intValue()).addListener(new FutureListener<Void>() {
-                @Override
-                public void operationComplete(Future<Void> future) throws Exception {
-                    if (!future.isSuccess()) {
-                        result.tryFailure(future.cause());
-                        return;
-                    }
-
-                    result.trySuccess(null);
-                }
-            });
-        }
-
-        protected RFuture<Void> acquireAsync(int value) {
-            return semaphore.acquireAsync(value);
-        }
-    }
-
-    private class SumListener implements FutureListener<Long> {
-        
-        private final RPromise<T> result;
-
-        private SumListener(RPromise<T> result) {
-            this.result = result;
-        }
-
-        @Override
-        public void operationComplete(Future<Long> future) throws Exception {
-            if (!future.isSuccess()) {
-                result.tryFailure(future.cause());
-                return;
-            }
-
-            acquireAsync(future.getNow().intValue()).addListener(new FutureListener<Void>() {
-                @Override
-                public void operationComplete(Future<Void> future) throws Exception {
-                    if (!future.isSuccess()) {
-                        result.tryFailure(future.cause());
-                        return;
-                    }
-
-                    RFuture<T> valueFuture = getAndDeleteAsync();
-                    valueFuture.addListener(new FutureListener<T>() {
-                        @Override
-                        public void operationComplete(Future<T> future) throws Exception {
-                            if (!future.isSuccess()) {
-                                result.tryFailure(future.cause());
-                                return;
-                            }
-                            
-                            result.trySuccess(future.getNow());
-                        }
-                    });
-                }
-            });
-        }
-
-        protected RFuture<Void> acquireAsync(int value) {
-            return semaphore.acquireAsync(value);
-        }
-    }
-
     private static final Logger log = LoggerFactory.getLogger(RedissonBaseAdder.class);
     
-    private static final long CLEAR_MSG = 0;
-    private static final long SUM_MSG = 1;
+    private static final String CLEAR_MSG = "0";
+    private static final String SUM_MSG = "1";
 
-    private final RSemaphore semaphore;
-    private final RTopic<Long> topic;
+    private final RedissonClient redisson;
+    private final RTopic topic;
     private final int listenerId;
     
-    public RedissonBaseAdder(CommandAsyncExecutor connectionManager, String name, RedissonClient redisson) {
-        super(connectionManager, name);
-        
-        topic = redisson.getTopic(suffixName(getName(), "topic"), LongCodec.INSTANCE);
-        semaphore = redisson.getSemaphore(suffixName(getName(), "semaphore"));
-        listenerId = topic.addListener(new MessageListener<Long>() {
-            
-            @Override
-            public void onMessage(String channel, Long msg) {
-                if (msg == SUM_MSG) {
-                    RFuture<T> addAndGetFuture = addAndGetAsync();
-                    addAndGetFuture.addListener(new FutureListener<T>() {
-                        @Override
-                        public void operationComplete(Future<T> future) throws Exception {
-                            if (!future.isSuccess()) {
-                                log.error("Can't increase sum", future.cause());
-                                return;
-                            }
-                            
-                            semaphore.releaseAsync().addListener(new FutureListener<Void>() {
-                                @Override
-                                public void operationComplete(Future<Void> future) throws Exception {
-                                    if (!future.isSuccess()) {
-                                        log.error("Can't release semaphore", future.cause());
-                                        return;
-                                    }
-                                }
-                            });
-                        }
-                    });
-                }
-                
-                if (msg == CLEAR_MSG) {
-                    doReset();
-                    semaphore.releaseAsync().addListener(new FutureListener<Void>() {
-                        @Override
-                        public void operationComplete(Future<Void> future) throws Exception {
-                            if (!future.isSuccess()) {
-                                log.error("Can't release semaphore", future.cause());
-                                return;
-                            }
-                        }
-                    });
-                }
+    public RedissonBaseAdder(CommandAsyncExecutor commandExecutor, String name, RedissonClient redisson) {
+        super(commandExecutor, name);
+
+        if (getSubscribeService().isShardingSupported()) {
+            topic = RedissonShardedTopic.createRaw(StringCodec.INSTANCE, commandExecutor, suffixName(getRawName(), "topic"));
+        } else {
+            topic = RedissonTopic.createRaw(StringCodec.INSTANCE, commandExecutor, suffixName(getRawName(), "topic"));
+        }
+
+        this.redisson = redisson;
+
+        AdderEntry entry = getServiceManager().getAddersUsage().computeIfAbsent(name, r -> new AdderEntry());
+        entry.getUsage().incrementAndGet();
+
+        listenerId = topic.addListener(String.class, (channel, msg) -> {
+            String[] parts = msg.split(":");
+            String id = parts[1];
+
+            entry.getIds().add(id);
+
+            if (parts[0].equals(SUM_MSG)) {
+                RFuture<T> addAndGetFuture = addAndGetAsync(id);
+                addAndGetFuture.whenComplete((res, e) -> {
+                    if (e != null) {
+                        log.error("Can't increase sum", e);
+                        return;
+                    }
+
+                    release(id, entry);
+                });
             }
 
+            if (parts[0].equals(CLEAR_MSG)) {
+                doReset();
+
+                release(id, entry);
+            }
         });
-        
+    }
+
+    private void release(String id, AdderEntry entry) {
+        AtomicInteger counter = getServiceManager().getAddersCounter().computeIfAbsent(id, r -> new AtomicInteger());
+        if (counter.incrementAndGet() == entry.getUsage().get()
+                || entry.getUsage().get() == 0) {
+            getServiceManager().getAddersCounter().remove(id);
+            entry.getIds().remove(id);
+            RSemaphore semaphore = getSemaphore(id);
+            semaphore.releaseAsync().whenComplete((r, ex) -> {
+                if (ex != null) {
+                    log.error("Can't release semaphore", ex);
+                }
+            });
+        }
     }
 
     protected abstract void doReset();
@@ -187,78 +111,85 @@ public abstract class RedissonBaseAdder<T extends Number> extends RedissonExpira
     }
     
     public RFuture<T> sumAsync() {
-        final RPromise<T> result = new RedissonPromise<T>();
-        
-        RFuture<Long> future = topic.publishAsync(SUM_MSG);
-        future.addListener(new SumListener(result));
-        
-        return result;
-    }
-    
-    public RFuture<T> sumAsync(final long timeout, final TimeUnit timeUnit) {
-        RPromise<T> result = new RedissonPromise<T>();
-        
-        RFuture<Long> future = topic.publishAsync(SUM_MSG);
-        future.addListener(new SumListener(result) {
-            @Override
-            protected RFuture<Void> acquireAsync(int value) {
-                return tryAcquire(timeout, timeUnit, value);
-            }
+        String id = getServiceManager().generateId();
+        RSemaphore semaphore = getSemaphore(id);
 
-        });
-        
-        return result;
+        RFuture<Long> future = topic.publishAsync(SUM_MSG + ":" + id);
+        CompletionStage<T> f = future.thenCompose(r -> semaphore.acquireAsync(r.intValue()))
+                                        .thenCompose(r -> getAndDeleteAsync(id))
+                                        .thenCompose(r -> semaphore.deleteAsync().thenApply(res -> r));
+        return new CompletableFutureWrapper<>(f);
     }
 
-    protected RFuture<Void> tryAcquire(long timeout, TimeUnit timeUnit, int value) {
-        final RPromise<Void> acquireResult = new RedissonPromise<Void>();
-        semaphore.tryAcquireAsync(value, timeout, timeUnit).addListener(new FutureListener<Boolean>() {
-            @Override
-            public void operationComplete(Future<Boolean> future) throws Exception {
-                if (!future.isSuccess()) {
-                    acquireResult.tryFailure(future.cause());
-                    return;
-                }
-                
-                if (future.getNow()) {
-                    acquireResult.trySuccess(null);
-                } else {
-                    acquireResult.tryFailure(new TimeoutException());
-                }
+    private RSemaphore getSemaphore(String id) {
+        return redisson.getSemaphore(suffixName(getRawName(), id + ":semaphore"));
+    }
+
+    protected String getCounterName(String id) {
+        return suffixName(getRawName(), id + ":counter");
+    }
+
+    public RFuture<T> sumAsync(long timeout, TimeUnit timeUnit) {
+        String id = getServiceManager().generateId();
+        RSemaphore semaphore = getSemaphore(id);
+
+        RFuture<Long> future = topic.publishAsync(SUM_MSG + ":" + id);
+        CompletionStage<T> f = future.thenCompose(r -> {
+                    return tryAcquire(semaphore, timeout, timeUnit, r.intValue());
+                })
+                                    .thenCompose(r -> getAndDeleteAsync(id))
+                                    .thenCompose(r -> semaphore.deleteAsync().thenApply(res -> r));
+        return new CompletableFutureWrapper<>(f);
+    }
+
+    protected CompletionStage<Void> tryAcquire(RSemaphore semaphore, long timeout, TimeUnit timeUnit, int value) {
+        return semaphore.tryAcquireAsync(value, timeout, timeUnit).handle((res, e) -> {
+            if (e != null) {
+                throw new CompletionException(e);
             }
+            
+            if (res) {
+                return null;
+            }
+            throw new CompletionException(new TimeoutException());
         });
-        return acquireResult;
     }
 
     public RFuture<Void> resetAsync() {
-        final RPromise<Void> result = new RedissonPromise<Void>();
-        
-        RFuture<Long> future = topic.publishAsync(CLEAR_MSG);
-        future.addListener(new ResetListener(result));
-        
-        return result;
+        String id = getServiceManager().generateId();
+        RSemaphore semaphore = getSemaphore(id);
+
+        RFuture<Long> future = topic.publishAsync(CLEAR_MSG + ":" + id);
+        CompletionStage<Void> f = future.thenCompose(r -> semaphore.acquireAsync(r.intValue()))
+                                        .thenCompose(r -> semaphore.deleteAsync().thenApply(res -> null));
+        return new CompletableFutureWrapper<>(f);
     }
     
-    public RFuture<Void> resetAsync(final long timeout, final TimeUnit timeUnit) {
-        final RPromise<Void> result = new RedissonPromise<Void>();
-        
-        RFuture<Long> future = topic.publishAsync(CLEAR_MSG);
-        future.addListener(new ResetListener(result) {
-            @Override
-            protected RFuture<Void> acquireAsync(int value) {
-                return tryAcquire(timeout, timeUnit, value);
-            }
-        });
-        
-        return result;
+    public RFuture<Void> resetAsync(long timeout, TimeUnit timeUnit) {
+        String id = getServiceManager().generateId();
+        RSemaphore semaphore = getSemaphore(id);
+
+        RFuture<Long> future = topic.publishAsync(CLEAR_MSG + ":" + id);
+        CompletionStage<Void> f = future.thenCompose(r -> tryAcquire(semaphore, timeout, timeUnit, r.intValue()))
+                                        .thenCompose(r -> semaphore.deleteAsync().thenApply(res -> null));
+        return new CompletableFutureWrapper<>(f);
     }
 
     public void destroy() {
         topic.removeListener(listenerId);
+
+        AdderEntry entry = getServiceManager().getAddersUsage().get(name);
+        if (entry != null
+                && entry.getUsage().decrementAndGet() == 0) {
+            for (String id : entry.getIds()) {
+                release(id, entry);
+            }
+            getServiceManager().getAddersUsage().remove(name, entry);
+        }
     }
 
-    protected abstract RFuture<T> addAndGetAsync();
+    protected abstract RFuture<T> addAndGetAsync(String id);
 
-    protected abstract RFuture<T> getAndDeleteAsync();
+    protected abstract RFuture<T> getAndDeleteAsync(String id);
 
 }

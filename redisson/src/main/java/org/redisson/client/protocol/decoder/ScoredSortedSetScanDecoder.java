@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
  */
 package org.redisson.client.protocol.decoder;
 
+import org.redisson.client.codec.Codec;
 import org.redisson.client.codec.DoubleCodec;
 import org.redisson.client.handler.State;
 import org.redisson.client.protocol.Decoder;
@@ -28,11 +29,11 @@ import org.redisson.client.protocol.Decoder;
 public class ScoredSortedSetScanDecoder<T> extends ObjectListReplayDecoder<T> {
 
     @Override
-    public Decoder<Object> getDecoder(int paramNum, State state) {
+    public Decoder<Object> getDecoder(Codec codec, int paramNum, State state, long size) {
         if (paramNum % 2 != 0) {
             return DoubleCodec.INSTANCE.getValueDecoder();
         }
-        return super.getDecoder(paramNum, state);
+        return super.getDecoder(codec, paramNum, state, size);
     }
     
 }

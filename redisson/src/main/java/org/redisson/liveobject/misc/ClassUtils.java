@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -45,8 +45,6 @@
 
 package org.redisson.liveobject.misc;
 
-import org.redisson.api.RObject;
-
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -54,6 +52,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+
+import org.redisson.api.RLiveObject;
+import org.redisson.cache.LRUCacheMap;
 
 /**
  *
@@ -106,33 +108,58 @@ public class ClassUtils {
         }
     }
 
+    private static final Object NO_FIELD = new Object();
+    private static final Map<String, Object> FIELD_CACHE = new LRUCacheMap<>(1000, 0, 0);
+
     public static Field getDeclaredField(Class<?> clazz, String fieldName) throws NoSuchFieldException {
-        for (Class c : getClassHierarchy(clazz)) {
-            for (Field field : c.getDeclaredFields()) {
-                if (field.getName().equals(fieldName)) {
-                    return field;
+        Object field = FIELD_CACHE.get(clazz.getName() + ":" + fieldName);
+        if (field == null) {
+            for (Class<?> c : getClassHierarchy(clazz)) {
+                for (Field f : c.getDeclaredFields()) {
+                    if (f.getName().equals(fieldName)) {
+                        FIELD_CACHE.put(clazz.getName() + ":" + fieldName, f);
+                        return f;
+                    }
                 }
             }
         }
+        if (field instanceof Field) {
+            return (Field) field;
+        }
+        if (field == null) {
+            FIELD_CACHE.put(clazz.getName() + ":" + fieldName, NO_FIELD);
+        }
         throw new NoSuchFieldException("No such field: " + fieldName);
     }
+    
+    private static final Map<Class<?>, Boolean> ANNOTATED_CLASSES = new LRUCacheMap<>(500, 0, 0);
 
     public static boolean isAnnotationPresent(Class<?> clazz, Class<? extends Annotation> annotation) {
-        for (Class<?> c : getClassHierarchy(clazz)) {
-            if (c.isAnnotationPresent(annotation)) {
-                return true;
-            }
+        if (clazz.getName().startsWith("java.")) {
+            return false;
         }
-        return false;
+        
+        Boolean isAnnotated = ANNOTATED_CLASSES.get(clazz);
+        if (isAnnotated == null) {
+            for (Class<?> c : getClassHierarchy(clazz)) {
+                if (c.isAnnotationPresent(annotation)) {
+                    ANNOTATED_CLASSES.put(clazz, true);
+                    return true;
+                }
+            }
+            ANNOTATED_CLASSES.put(clazz, false);
+            return false;
+        }
+        return isAnnotated;
     }
 
     private static Iterable<Class<?>> getClassHierarchy(Class<?> clazz) {
         // Don't descend into hierarchy for RObjects
-        if (Arrays.asList(clazz.getInterfaces()).contains(RObject.class)) {
+        if (Arrays.asList(clazz.getInterfaces()).contains(RLiveObject.class)) {
             return Collections.<Class<?>>singleton(clazz);
         }
         List<Class<?>> classes = new ArrayList<Class<?>>();
-        for (Class c = clazz; c != null; c = c.getSuperclass()) {
+        for (Class<?> c = clazz; c != null; c = c.getSuperclass()) {
             classes.add(c);
         }
         return classes;

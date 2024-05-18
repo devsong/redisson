@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,13 @@
  */
 package org.redisson.cluster;
 
+import java.util.Objects;
+
+/**
+ *
+ * @author Nikita Koksharov
+ *
+ */
 public class ClusterSlotRange {
 
     private final int startSlot;
@@ -33,38 +40,26 @@ public class ClusterSlotRange {
     public int getEndSlot() {
         return endSlot;
     }
-    
+
+    public boolean hasSlot(int slot) {
+        return slot >= startSlot && slot <= endSlot;
+    }
+
     public int size() {
         return endSlot - startSlot + 1;
     }
 
-    public boolean isOwn(int slot) {
-        return slot >= startSlot && slot <= endSlot;
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        ClusterSlotRange that = (ClusterSlotRange) o;
+        return startSlot == that.startSlot && endSlot == that.endSlot;
     }
 
     @Override
     public int hashCode() {
-        final int prime = 31;
-        int result = 1;
-        result = prime * result + endSlot;
-        result = prime * result + startSlot;
-        return result;
-    }
-
-    @Override
-    public boolean equals(Object obj) {
-        if (this == obj)
-            return true;
-        if (obj == null)
-            return false;
-        if (getClass() != obj.getClass())
-            return false;
-        ClusterSlotRange other = (ClusterSlotRange) obj;
-        if (endSlot != other.endSlot)
-            return false;
-        if (startSlot != other.startSlot)
-            return false;
-        return true;
+        return Objects.hash(startSlot, endSlot);
     }
 
     @Override

@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,12 +15,13 @@
  */
 package org.redisson;
 
-import org.redisson.api.RAtomicLong;
 import org.redisson.api.RFuture;
 import org.redisson.api.RLongAdder;
 import org.redisson.api.RedissonClient;
 import org.redisson.command.CommandAsyncExecutor;
-import org.redisson.misc.LongAdder;
+
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.LongAdder;
 
 /**
  * 
@@ -29,13 +30,13 @@ import org.redisson.misc.LongAdder;
  */
 public class RedissonLongAdder extends RedissonBaseAdder<Long> implements RLongAdder {
 
-    private final RAtomicLong atomicLong;
+    private final RedissonClient redisson;
     private final LongAdder counter = new LongAdder();
     
     public RedissonLongAdder(CommandAsyncExecutor connectionManager, String name, RedissonClient redisson) {
         super(connectionManager, name, redisson);
-        
-        atomicLong = redisson.getAtomicLong(getName());
+
+        this.redisson = redisson;
     }
 
     @Override
@@ -44,13 +45,13 @@ public class RedissonLongAdder extends RedissonBaseAdder<Long> implements RLongA
     }
     
     @Override
-    protected RFuture<Long> addAndGetAsync() {
-        return atomicLong.getAndAddAsync(counter.sum());
+    protected RFuture<Long> addAndGetAsync(String id) {
+        return redisson.getAtomicLong(getCounterName(id)).getAndAddAsync(counter.sum());
     }
     
     @Override
-    protected RFuture<Long> getAndDeleteAsync() {
-        return atomicLong.getAndDeleteAsync();
+    protected RFuture<Long> getAndDeleteAsync(String id) {
+        return redisson.getAtomicLong(getCounterName(id)).getAndDeleteAsync();
     }
 
     @Override
@@ -70,7 +71,7 @@ public class RedissonLongAdder extends RedissonBaseAdder<Long> implements RLongA
 
     @Override
     public long sum() {
-        return get(sumAsync());
+        return get(sumAsync(60, TimeUnit.SECONDS));
     }
     
 }

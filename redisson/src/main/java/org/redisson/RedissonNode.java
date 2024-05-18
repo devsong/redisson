@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,31 +15,32 @@
  */
 package org.redisson;
 
-import java.io.File;
-import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.util.Map.Entry;
-
+import io.netty.buffer.ByteBufUtil;
 import org.redisson.api.RExecutorService;
-import org.redisson.api.RFuture;
 import org.redisson.api.RedissonClient;
+import org.redisson.api.WorkerOptions;
 import org.redisson.client.RedisConnection;
 import org.redisson.config.RedissonNodeConfig;
+import org.redisson.config.RedissonNodeFileConfig;
 import org.redisson.connection.ConnectionManager;
 import org.redisson.connection.MasterSlaveEntry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import io.netty.buffer.ByteBufUtil;
-import io.netty.util.internal.PlatformDependent;
-import io.netty.util.internal.ThreadLocalRandom;
+import java.io.File;
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.util.Map.Entry;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 
  * @author Nikita Koksharov
  *
  */
-public class RedissonNode {
+public final class RedissonNode {
 
     private static final Logger log = LoggerFactory.getLogger(RedissonNode.class);
     
@@ -60,11 +61,13 @@ public class RedissonNode {
     public RedissonClient getRedisson() {
         return redisson;
     }
-    
+
+    @Deprecated
     public InetSocketAddress getLocalAddress() {
         return localAddress;
     }
-    
+
+    @Deprecated
     public InetSocketAddress getRemoteAddress() {
         return remoteAddress;
     }
@@ -75,8 +78,7 @@ public class RedissonNode {
     
     private String generateId() {
         byte[] id = new byte[8];
-        // TODO JDK UPGRADE replace to native ThreadLocalRandom
-        PlatformDependent.threadLocalRandom().nextBytes(id);
+        ThreadLocalRandom.current().nextBytes(id);
         return ByteBufUtil.hexDump(id);
     }
 
@@ -86,16 +88,16 @@ public class RedissonNode {
         }
         
         String configPath = args[0];
-        RedissonNodeConfig config = null;
+        RedissonNodeFileConfig config = null;
         try {
-            config = RedissonNodeConfig.fromJSON(new File(configPath));
+            config = RedissonNodeFileConfig.fromYAML(new File(configPath));
         } catch (IOException e) {
             // trying next format
             try {
-                config = RedissonNodeConfig.fromYAML(new File(configPath));
+                config = RedissonNodeFileConfig.fromJSON(new File(configPath));
             } catch (IOException e1) {
-                log.error("Can't parse json config " + configPath, e);
-                throw new IllegalArgumentException("Can't parse yaml config " + configPath, e1);
+                e1.addSuppressed(e);
+                throw new IllegalArgumentException("Can't parse config " + configPath, e1);
             }
         }
         
@@ -116,7 +118,7 @@ public class RedissonNode {
      */
     public void shutdown() {
         if (hasRedissonInstance) {
-            redisson.shutdown();
+            redisson.shutdown(0, 15, TimeUnit.MINUTES);
             log.info("Redisson node has been shutdown successfully");
         }
     }
@@ -140,39 +142,62 @@ public class RedissonNode {
             if (mapReduceWorkers == 0) {
                 mapReduceWorkers = Runtime.getRuntime().availableProcessors();
             }
-            redisson.getExecutorService(RExecutorService.MAPREDUCE_NAME).registerWorkers(mapReduceWorkers);
+            
+            WorkerOptions options = WorkerOptions.defaults()
+                                                .workers(mapReduceWorkers)
+                                                .beanFactory(config.getBeanFactory());
+            
+            redisson.getExecutorService(RExecutorService.MAPREDUCE_NAME).registerWorkers(options);
             log.info("{} map reduce worker(s) registered", mapReduceWorkers);
         }
         
         for (Entry<String, Integer> entry : config.getExecutorServiceWorkers().entrySet()) {
             String name = entry.getKey();
             int workers = entry.getValue();
-            redisson.getExecutorService(name).registerWorkers(workers);
-            log.info("{} worker(s) for '{}' ExecutorService registered", workers, name);
+            
+            WorkerOptions options = WorkerOptions.defaults()
+                                                .workers(workers)
+                                                .beanFactory(config.getBeanFactory());
+            
+            redisson.getExecutorService(name).registerWorkers(options);
+            log.info("{} worker(s) registered for ExecutorService with '{}' name", workers, name);
         }
 
         log.info("Redisson node started!");
     }
 
     private void retrieveAddresses() {
-        ConnectionManager connectionManager = ((Redisson)redisson).getConnectionManager();
+        ConnectionManager connectionManager = ((Redisson) redisson).getConnectionManager();
         for (MasterSlaveEntry entry : connectionManager.getEntrySet()) {
-            RFuture<RedisConnection> readFuture = entry.connectionReadOp(null);
-            if (readFuture.awaitUninterruptibly((long)connectionManager.getConfig().getConnectTimeout()) 
-                    && readFuture.isSuccess()) {
-                RedisConnection connection = readFuture.getNow();
-                entry.releaseRead(connection);
-                remoteAddress = (InetSocketAddress) connection.getChannel().remoteAddress();
-                localAddress = (InetSocketAddress) connection.getChannel().localAddress();
+            CompletionStage<RedisConnection> readFuture = entry.connectionReadOp(null, false);
+            RedisConnection readConnection = null;
+            try {
+                readConnection = readFuture.toCompletableFuture().get(connectionManager.getServiceManager().getConfig().getConnectTimeout(), TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (Exception e) {
+                // skip
+            }
+            if (readConnection != null) {
+                entry.releaseRead(readConnection);
+                remoteAddress = (InetSocketAddress) readConnection.getChannel().remoteAddress();
+                localAddress = (InetSocketAddress) readConnection.getChannel().localAddress();
                 return;
             }
-            RFuture<RedisConnection> writeFuture = entry.connectionWriteOp(null);
-            if (writeFuture.awaitUninterruptibly((long)connectionManager.getConfig().getConnectTimeout())
-                    && writeFuture.isSuccess()) {
-                RedisConnection connection = writeFuture.getNow();
-                entry.releaseWrite(connection);
-                remoteAddress = (InetSocketAddress) connection.getChannel().remoteAddress();
-                localAddress = (InetSocketAddress) connection.getChannel().localAddress();
+
+            CompletionStage<RedisConnection> writeFuture = entry.connectionWriteOp(null);
+            RedisConnection writeConnection = null;
+            try {
+                writeConnection = writeFuture.toCompletableFuture().get(connectionManager.getServiceManager().getConfig().getConnectTimeout(), TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (Exception e) {
+                // skip
+            }
+            if (writeConnection != null) {
+                entry.releaseWrite(writeConnection);
+                remoteAddress = (InetSocketAddress) writeConnection.getChannel().remoteAddress();
+                localAddress = (InetSocketAddress) writeConnection.getChannel().localAddress();
                 return;
             }
         }
@@ -186,6 +211,16 @@ public class RedissonNode {
      */
     public static RedissonNode create(RedissonNodeConfig config) {
         return create(config, null);
+    }
+
+    /**
+     * Create Redisson node instance with provided config
+     *
+     * @param config of RedissonNode
+     * @return RedissonNode instance
+     */
+    public static RedissonNode create(RedissonNodeFileConfig config) {
+        return create(new RedissonNodeConfig(config), null);
     }
 
     /**

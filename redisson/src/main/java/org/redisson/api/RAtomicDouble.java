@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 package org.redisson.api;
 
 /**
- * Distributed alternative to the AtomicDouble
+ * Distributed implementation to the AtomicDouble
  *
  * @author Nikita Koksharov
  *
@@ -57,14 +57,14 @@ public interface RAtomicDouble extends RExpirable, RAtomicDoubleAsync {
     double decrementAndGet();
 
     /**
-     * Gets the current value.
+     * Returns current value.
      *
-     * @return the current value
+     * @return current value
      */
     double get();
     
     /**
-     * Gets and deletes object
+     * Returns and deletes object
      * 
      * @return the current value
      */
@@ -106,5 +106,17 @@ public interface RAtomicDouble extends RExpirable, RAtomicDoubleAsync {
      * @param newValue the new value
      */
     void set(double newValue);
+
+    /**
+     * Adds object event listener
+     *
+     * @see org.redisson.api.listener.IncrByListener
+     * @see org.redisson.api.ExpiredObjectListener
+     * @see org.redisson.api.DeletedObjectListener
+     *
+     * @param listener object event listener
+     * @return listener id
+     */
+    int addListener(ObjectListener listener);
 
 }

@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,17 +15,21 @@
  */
 package org.redisson;
 
-import java.util.Iterator;
-import java.util.NoSuchElementException;
-
 import org.redisson.api.RFuture;
 import org.redisson.api.RPriorityDeque;
 import org.redisson.api.RedissonClient;
+import org.redisson.api.queue.DequeMoveArgs;
 import org.redisson.client.codec.Codec;
 import org.redisson.client.protocol.RedisCommand;
 import org.redisson.client.protocol.RedisCommands;
 import org.redisson.client.protocol.decoder.ListFirstObjectDecoder;
-import org.redisson.command.CommandExecutor;
+import org.redisson.command.CommandAsyncExecutor;
+
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.List;
+import java.util.NoSuchElementException;
+import java.util.stream.Stream;
 
 /**
  * Distributed and concurrent implementation of {@link java.util.Queue}
@@ -39,22 +43,64 @@ public class RedissonPriorityDeque<V> extends RedissonPriorityQueue<V> implement
     private static final RedisCommand<Object> LRANGE_SINGLE = new RedisCommand<Object>("LRANGE", new ListFirstObjectDecoder());
 
 
-    protected RedissonPriorityDeque(CommandExecutor commandExecutor, String name, RedissonClient redisson) {
+    protected RedissonPriorityDeque(CommandAsyncExecutor commandExecutor, String name, RedissonClient redisson) {
         super(commandExecutor, name, redisson);
     }
 
-    public RedissonPriorityDeque(Codec codec, CommandExecutor commandExecutor, String name, RedissonClient redisson) {
+    public RedissonPriorityDeque(Codec codec, CommandAsyncExecutor commandExecutor, String name, RedissonClient redisson) {
         super(codec, commandExecutor, name, redisson);
     }
 
+    @Override
+    public int addFirstIfExists(V... elements) {
+        throw new UnsupportedOperationException("use add or put method");
+    }
+
+    @Override
+    public int addLastIfExists(V... elements) {
+        throw new UnsupportedOperationException("use add or put method");
+    }
+
+    @Override
+    public int addFirst(V... elements) {
+        throw new UnsupportedOperationException("use add or put method");
+    }
+
+    @Override
+    public int addLast(V... elements) {
+        throw new UnsupportedOperationException("use add or put method");
+    }
+
+    @Override
+    public RFuture<Integer> addFirstAsync(V... elements) {
+        throw new UnsupportedOperationException("use add or put method");
+    }
+
+    @Override
+    public RFuture<Integer> addLastAsync(V... elements) {
+        throw new UnsupportedOperationException("use add or put method");
+    }
+
+    @Override
+    public RFuture<Integer> addFirstIfExistsAsync(V... elements) {
+        throw new UnsupportedOperationException("use add or put method");
+    }
+
+    @Override
+    public RFuture<Integer> addLastIfExistsAsync(V... elements) {
+        throw new UnsupportedOperationException("use add or put method");
+    }
+
+    @Override
     public RFuture<Void> addFirstAsync(V e) {
         throw new UnsupportedOperationException("use add or put method");
     }
 
+    @Override
     public RFuture<Void> addLastAsync(V e) {
         throw new UnsupportedOperationException("use add or put method");
     }
-    
+
     @Override
     public void addFirst(V e) {
         throw new UnsupportedOperationException("use add or put method");
@@ -101,9 +147,9 @@ public class RedissonPriorityDeque<V> extends RedissonPriorityQueue<V> implement
         };
     }
 
-//    @Override
+    @Override
     public RFuture<V> getLastAsync() {
-        return commandExecutor.readAsync(getName(), codec, LRANGE_SINGLE, getName(), -1, -1);
+        return commandExecutor.readAsync(getRawName(), codec, LRANGE_SINGLE, getRawName(), -1, -1);
     }
 
     @Override
@@ -133,7 +179,7 @@ public class RedissonPriorityDeque<V> extends RedissonPriorityQueue<V> implement
         throw new UnsupportedOperationException("use add or put method");
     }
     
-//    @Override
+    @Override
     public RFuture<V> peekFirstAsync() {
         return getAsync(0);
     }
@@ -162,7 +208,7 @@ public class RedissonPriorityDeque<V> extends RedissonPriorityQueue<V> implement
     }
 
     public RFuture<V> pollLastAsync() {
-        return pollAsync(RedisCommands.RPOP, getName());
+        return wrapLockedAsync(RedisCommands.RPOP, getRawName());
     }
 
     @Override
@@ -170,7 +216,7 @@ public class RedissonPriorityDeque<V> extends RedissonPriorityQueue<V> implement
         return get(pollLastAsync());
     }
 
-//    @Override
+    @Override
     public RFuture<V> popAsync() {
         return pollAsync();
     }
@@ -188,8 +234,15 @@ public class RedissonPriorityDeque<V> extends RedissonPriorityQueue<V> implement
     public RFuture<Void> pushAsync(V e) {
         throw new UnsupportedOperationException("use add or put method");
     }
-    
-//    @Override
+
+    @Override
+    public RFuture<Boolean> removeAsync(Object o, int count) {
+        return wrapLockedAsync(() -> {
+            return super.removeAsync(o, count);
+        });
+    }
+
+    @Override
     public RFuture<Boolean> removeFirstOccurrenceAsync(Object o) {
         return removeAsync(o, 1);
     }
@@ -199,12 +252,12 @@ public class RedissonPriorityDeque<V> extends RedissonPriorityQueue<V> implement
         return remove(o, 1);
     }
 
-//    @Override
+    @Override
     public RFuture<V> removeFirstAsync() {
         return pollAsync();
     }
 
-//    @Override
+    @Override
     public RFuture<V> removeLastAsync() {
         return pollLastAsync();
     }
@@ -218,7 +271,7 @@ public class RedissonPriorityDeque<V> extends RedissonPriorityQueue<V> implement
         return value;
     }
 
-//    @Override
+    @Override
     public RFuture<Boolean> removeLastOccurrenceAsync(Object o) {
         return removeAsync(o, -1);
     }
@@ -226,6 +279,54 @@ public class RedissonPriorityDeque<V> extends RedissonPriorityQueue<V> implement
     @Override
     public boolean removeLastOccurrence(Object o) {
         return remove(o, -1);
+    }
+
+    @Override
+    public Stream<V> descendingStream() {
+        return toStream(descendingIterator());
+    }
+
+    @Override
+    public RFuture<List<V>> pollFirstAsync(int limit) {
+        return pollAsync(limit);
+    }
+
+    @Override
+    public List<V> pollFirst(int limit) {
+        return poll(limit);
+    }
+
+    @Override
+    public List<V> pollLast(int limit) {
+        return get(pollLastAsync(limit));
+    }
+
+    @Override
+    public RFuture<List<V>> pollLastAsync(int limit) {
+        return wrapLockedAsync(() -> {
+            return commandExecutor.evalWriteNoRetryAsync(getRawName(), codec, RedisCommands.EVAL_LIST,
+                      "local result = {};"
+                          + "for i = 1, ARGV[1], 1 do " +
+                                "local value = redis.call('rpop', KEYS[1]);" +
+                                "if value ~= false then " +
+                                    "table.insert(result, value);" +
+                                "else " +
+                                    "return result;" +
+                                "end;" +
+                            "end; " +
+                            "return result;",
+                    Collections.singletonList(getRawName()), limit);
+        });
+    }
+
+    @Override
+    public V move(DequeMoveArgs args) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public RFuture<V> moveAsync(DequeMoveArgs args) {
+        throw new UnsupportedOperationException();
     }
 
 }

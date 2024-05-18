@@ -1,18 +1,19 @@
 package org.redisson;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import org.junit.jupiter.api.Test;
+import org.redisson.api.RList;
+import org.redisson.api.RListMultimap;
+import org.redisson.client.codec.StringCodec;
 
 import java.io.Serializable;
-import java.util.AbstractMap;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
-import org.junit.Test;
-import org.redisson.api.RListMultimap;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-public class RedissonListMultimapTest extends BaseTest {
+public class RedissonListMultimapTest extends RedisDockerTest {
 
     public static class SimpleKey implements Serializable {
 
@@ -115,7 +116,30 @@ public class RedissonListMultimapTest extends BaseTest {
         }
 
     }
-    
+
+    @Test
+    public void testSizeInMemory() {
+        RListMultimap<String, String> list = redisson.getListMultimap("test");
+        list.put("1", "2");
+        assertThat(list.sizeInMemory()).isEqualTo(88);
+
+        list.put("1", "3");
+        assertThat(list.sizeInMemory()).isEqualTo(96);
+    }
+
+    @Test
+    public void testDelete() {
+        RListMultimap<String, String> testList = redisson.getListMultimap( "test" );
+        testList.put("1", "01");
+        testList.put("1", "02");
+        testList.put("1", "03");
+        RList<String> list = testList.get( "1" );
+
+        list.delete();
+        assertThat(testList.size()).isZero();
+        assertThat(testList.get("1").size()).isZero();
+    }
+
     @Test
     public void testReadAllKeySet() {
         RListMultimap<String, String> map = redisson.getListMultimap("test1");
@@ -181,18 +205,40 @@ public class RedissonListMultimapTest extends BaseTest {
     }
 
     @Test
-    public void testRemoveAll() {
+    public void testRemoveAllFromCollection() {
         RListMultimap<SimpleKey, SimpleValue> map = redisson.getListMultimap("test1");
-        map.put(new SimpleKey("0"), new SimpleValue("1"));
         map.put(new SimpleKey("0"), new SimpleValue("1"));
         map.put(new SimpleKey("0"), new SimpleValue("2"));
         map.put(new SimpleKey("0"), new SimpleValue("3"));
 
-        List<SimpleValue> values = map.removeAll(new SimpleKey("0"));
-        assertThat(values).containsExactly(new SimpleValue("1"), new SimpleValue("1"), new SimpleValue("2"), new SimpleValue("3"));
+        Collection<SimpleValue> values = Arrays.asList(new SimpleValue("1"), new SimpleValue("2"));
+        assertThat(map.get(new SimpleKey("0")).removeAll(values)).isTrue();
+        assertThat(map.get(new SimpleKey("0")).size()).isEqualTo(1);
+        assertThat(map.get(new SimpleKey("0")).removeAll(Arrays.asList(new SimpleValue("3")))).isTrue();
+        assertThat(map.get(new SimpleKey("0")).size()).isZero();
+        assertThat(map.get(new SimpleKey("0")).removeAll(Arrays.asList(new SimpleValue("3")))).isFalse();
+    }
+    
+    @Test
+    public void testRemoveAll() {
+        RListMultimap<String, String> map = redisson.getListMultimap("test1");
+        map.put("0", "1");
+        map.put("0", "1");
+        map.put("0", "2");
+        map.put("0", "3");
+
+        RList<String> set = map.get("0");
+        set.removeAll(Arrays.asList("4", "5"));
+        assertThat(map.size()).isEqualTo(4);
+
+        set.removeAll(Arrays.asList("3"));
+        assertThat(map.size()).isEqualTo(3);
+
+        List<String> values = map.removeAll("0");
+        assertThat(values).containsExactly("1", "1", "2");
         assertThat(map.size()).isZero();
 
-        List<SimpleValue> values2 = map.removeAll(new SimpleKey("0"));
+        List<String> values2 = map.removeAll("0");
         assertThat(values2).isEmpty();
     }
 
@@ -235,6 +281,20 @@ public class RedissonListMultimapTest extends BaseTest {
         assertThat(map.containsEntry(new SimpleKey("0"), new SimpleValue("2"))).isFalse();
     }
 
+    @Test
+    public void testRange() {
+        RListMultimap<Integer, Integer> map = redisson.getListMultimap("test1");
+        map.put(1, 1);
+        map.put(1, 2);
+        map.put(1, 3);
+        map.put(1, 4);
+        map.put(1, 5);
+
+        assertThat(map.get(1).range(1)).containsExactly(1, 2);
+        assertThat(map.get(1).range(1, 3)).containsExactly(2, 3, 4);
+    }
+
+    
     @Test
     public void testRemove() {
         RListMultimap<SimpleKey, SimpleValue> map = redisson.getListMultimap("test1");
@@ -309,7 +369,45 @@ public class RedissonListMultimapTest extends BaseTest {
 
         List<SimpleValue> allValues = map.getAll(new SimpleKey("0"));
         assertThat(allValues).containsExactlyElementsOf(values);
+
+        List<SimpleValue> oldValues2 = map.replaceValues(new SimpleKey("0"), Collections.emptyList());
+        assertThat(oldValues2).containsExactlyElementsOf(values);
+
+        List<SimpleValue> vals = map.getAll(new SimpleKey("0"));
+        assertThat(vals).isEmpty();
     }
 
+    @Test
+    public void testDistributedIterator() {
+        RListMultimap<String, String> map = redisson.getListMultimap("set", StringCodec.INSTANCE);
 
+        // populate set with elements
+        List<String> stringsOne = IntStream.range(0, 64).mapToObj(i -> "" + i).collect(Collectors.toList());
+        map.putAll("someKey", stringsOne);
+
+        Iterator<String> stringIterator = map.get("someKey")
+                .distributedIterator("iterator_{set}", 10);
+
+        // read some elements using iterator
+        List<String> strings = new ArrayList<>();
+        for (int i = 0; i < 20; i++) {
+            if (stringIterator.hasNext()) {
+                strings.add(stringIterator.next());
+            }
+        }
+
+        // create another iterator instance using the same name
+        RListMultimap<String, String> map2 = redisson.getListMultimap("set", StringCodec.INSTANCE);
+        Iterator<String> stringIterator2 = map2.get("someKey")
+                .distributedIterator("iterator_{set}", 10);
+
+        assertTrue(stringIterator2.hasNext());
+
+        // read all remaining elements
+        stringIterator2.forEachRemaining(strings::add);
+        stringIterator.forEachRemaining(strings::add);
+
+        assertThat(strings).containsAll(stringsOne);
+        assertThat(strings).hasSize(stringsOne.size());
+    }
 }

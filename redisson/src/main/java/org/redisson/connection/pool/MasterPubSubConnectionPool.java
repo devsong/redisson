@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,10 +15,13 @@
  */
 package org.redisson.connection.pool;
 
+import org.redisson.client.RedisPubSubConnection;
+import org.redisson.client.protocol.RedisCommand;
 import org.redisson.config.MasterSlaveServersConfig;
-import org.redisson.connection.ClientConnectionsEntry;
 import org.redisson.connection.ConnectionManager;
 import org.redisson.connection.MasterSlaveEntry;
+
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Connection pool for Publish/Subscribe used with single node
@@ -34,12 +37,8 @@ public class MasterPubSubConnectionPool extends PubSubConnectionPool {
     }
 
     @Override
-    protected ClientConnectionsEntry getEntry() {
-        return entries.get(0);
+    public CompletableFuture<RedisPubSubConnection> get(RedisCommand<?> command, boolean trackChanges) {
+        return acquireConnection(command, entries.peek(), trackChanges);
     }
 
-    public void remove(ClientConnectionsEntry entry) {
-        entries.remove(entry);
-    }
-    
 }

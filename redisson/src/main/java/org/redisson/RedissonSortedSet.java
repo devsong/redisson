@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,33 +15,25 @@
  */
 package org.redisson;
 
-import java.io.ByteArrayOutputStream;
-import java.io.ObjectOutputStream;
-import java.io.Serializable;
-import java.math.BigInteger;
-import java.security.MessageDigest;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Comparator;
-import java.util.Iterator;
-import java.util.NoSuchElementException;
-import java.util.SortedSet;
-
-import org.redisson.api.RBucket;
-import org.redisson.api.RFuture;
-import org.redisson.api.RLock;
-import org.redisson.api.RSortedSet;
-import org.redisson.api.RedissonClient;
+import io.netty.buffer.ByteBuf;
+import org.redisson.api.*;
 import org.redisson.api.mapreduce.RCollectionMapReduce;
+import org.redisson.client.RedisClient;
 import org.redisson.client.codec.Codec;
 import org.redisson.client.codec.StringCodec;
 import org.redisson.client.protocol.RedisCommands;
-import org.redisson.command.CommandExecutor;
+import org.redisson.command.CommandAsyncExecutor;
+import org.redisson.iterator.RedissonBaseIterator;
 import org.redisson.mapreduce.RedissonCollectionMapReduce;
-import org.redisson.misc.RPromise;
-import org.redisson.misc.RedissonPromise;
+import org.redisson.misc.CompletableFutureWrapper;
 
-import io.netty.buffer.ByteBuf;
+import java.io.ByteArrayOutputStream;
+import java.io.ObjectOutputStream;
+import java.math.BigInteger;
+import java.security.MessageDigest;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  *
@@ -49,26 +41,12 @@ import io.netty.buffer.ByteBuf;
  *
  * @param <V> value type
  */
-public class RedissonSortedSet<V> extends RedissonObject implements RSortedSet<V> {
-
-    private static class NaturalComparator<V> implements Comparator<V>, Serializable {
-
-        private static final long serialVersionUID = 7207038068494060240L;
-
-        static final NaturalComparator NATURAL_ORDER = new NaturalComparator();
-
-        public int compare(V c1, V c2) {
-            Comparable<Object> c1co = (Comparable<Object>) c1;
-            Comparable<Object> c2co = (Comparable<Object>) c2;
-            return c1co.compareTo(c2co);
-        }
-
-    }
+public class RedissonSortedSet<V> extends RedissonExpirable implements RSortedSet<V> {
 
     public static class BinarySearchResult<V> {
 
         private V value;
-        private Integer index;
+        private int index = -1;
 
         public BinarySearchResult(V value) {
             super();
@@ -92,41 +70,33 @@ public class RedissonSortedSet<V> extends RedissonObject implements RSortedSet<V
 
     }
 
-    private Comparator<? super V> comparator = NaturalComparator.NATURAL_ORDER;
+    private Comparator comparator = Comparator.naturalOrder();
 
-    CommandExecutor commandExecutor;
-    
     private RLock lock;
     private RedissonList<V> list;
     private RBucket<String> comparatorHolder;
     private RedissonClient redisson;
 
-    protected RedissonSortedSet(CommandExecutor commandExecutor, String name, RedissonClient redisson) {
+    protected RedissonSortedSet(CommandAsyncExecutor commandExecutor, String name, RedissonClient redisson) {
         super(commandExecutor, name);
-        this.commandExecutor = commandExecutor;
         this.redisson = redisson;
 
-        comparatorHolder = redisson.getBucket(getComparatorKeyName(), StringCodec.INSTANCE);
-        lock = redisson.getLock("redisson_sortedset_lock:{" + getName() + "}");
-        list = (RedissonList<V>) redisson.getList(getName());
-        
-        loadComparator();
+        comparatorHolder = new RedissonBucket<>(getComparatorKeyName(), StringCodec.INSTANCE, commandExecutor);
+        lock = new RedissonLock(getLockName(), commandExecutor);
+        list = (RedissonList<V>) redisson.<V>getList(getName(), codec);
     }
 
-    public RedissonSortedSet(Codec codec, CommandExecutor commandExecutor, String name, Redisson redisson) {
+    public RedissonSortedSet(Codec codec, CommandAsyncExecutor commandExecutor, String name, Redisson redisson) {
         super(codec, commandExecutor, name);
-        this.commandExecutor = commandExecutor;
 
-        comparatorHolder = redisson.getBucket(getComparatorKeyName(), StringCodec.INSTANCE);
-        lock = redisson.getLock("redisson_sortedset_lock:{" + getName() + "}");
-        list = (RedissonList<V>) redisson.getList(getName());
-
-        loadComparator();
+        comparatorHolder = new RedissonBucket<>(getComparatorKeyName(), StringCodec.INSTANCE, commandExecutor);
+        lock = new RedissonLock(getLockName(), commandExecutor);
+        list = (RedissonList<V>) redisson.<V>getList(getName(), codec);
     }
     
     @Override
     public <KOut, VOut> RCollectionMapReduce<V, KOut, VOut> mapReduce() {
-        return new RedissonCollectionMapReduce<V, KOut, VOut>(this, redisson, commandExecutor.getConnectionManager());
+        return new RedissonCollectionMapReduce<V, KOut, VOut>(this, redisson, commandExecutor);
     }
 
     private void loadComparator() {
@@ -179,7 +149,7 @@ public class RedissonSortedSet<V> extends RedissonObject implements RSortedSet<V
 
     @Override
     public RFuture<Collection<V>> readAllAsync() {
-        return commandExecutor.readAsync(getName(), codec, RedisCommands.LRANGE_SET, getName(), 0, -1);
+        return (RFuture<Collection<V>>) (Object) list.readAllAsync();
     }
     
     @Override
@@ -194,7 +164,7 @@ public class RedissonSortedSet<V> extends RedissonObject implements RSortedSet<V
 
     @Override
     public boolean contains(final Object o) {
-        return binarySearch((V)o, codec).getIndex() >= 0;
+        return binarySearch((V) o, codec).getIndex() >= 0;
     }
 
     @Override
@@ -225,14 +195,14 @@ public class RedissonSortedSet<V> extends RedissonObject implements RSortedSet<V
                 
                 ByteBuf encodedValue = encode(value);
                 
-                commandExecutor.evalWrite(getName(), RedisCommands.EVAL_VOID, 
+                commandExecutor.get(commandExecutor.evalWriteNoRetryAsync(list.getRawName(), codec, RedisCommands.EVAL_VOID,
                    "local len = redis.call('llen', KEYS[1]);"
                     + "if tonumber(ARGV[1]) < len then "
                         + "local pivot = redis.call('lindex', KEYS[1], ARGV[1]);"
                         + "redis.call('linsert', KEYS[1], 'before', pivot, ARGV[2]);"
                         + "return;"
                     + "end;"
-                    + "redis.call('rpush', KEYS[1], ARGV[2]);", Arrays.<Object>asList(getName()), index, encodedValue);
+                    + "redis.call('rpush', KEYS[1], ARGV[2]);", Arrays.<Object>asList(list.getRawName()), index, encodedValue));
                 return true;
             } else {
                 return false;
@@ -253,37 +223,38 @@ public class RedissonSortedSet<V> extends RedissonObject implements RSortedSet<V
         }
     }
 
+    @Override
     public RFuture<Boolean> addAsync(final V value) {
-        final RPromise<Boolean> promise = new RedissonPromise<Boolean>();
-        commandExecutor.getConnectionManager().getExecutor().execute(new Runnable() {
+        CompletableFuture<Boolean> promise = new CompletableFuture<>();
+        commandExecutor.getServiceManager().getExecutor().execute(new Runnable() {
             public void run() {
                 try {
                     boolean res = add(value);
-                    promise.trySuccess(res);
+                    promise.complete(res);
                 } catch (Exception e) {
-                    promise.tryFailure(e);
+                    promise.completeExceptionally(e);
                 }
             }
         });
-        return promise;
+        return new CompletableFutureWrapper<>(promise);
     }
 
     @Override
     public RFuture<Boolean> removeAsync(final Object value) {
-        final RPromise<Boolean> promise = new RedissonPromise<Boolean>();
-        commandExecutor.getConnectionManager().getExecutor().execute(new Runnable() {
+        CompletableFuture<Boolean> promise = new CompletableFuture<>();
+        commandExecutor.getServiceManager().getExecutor().execute(new Runnable() {
             @Override
             public void run() {
                 try {
                     boolean result = remove(value);
-                    promise.trySuccess(result);
+                    promise.complete(result);
                 } catch (Exception e) {
-                    promise.tryFailure(e);
+                    promise.completeExceptionally(e);
                 }
             }
         });
 
-        return promise;
+        return new CompletableFutureWrapper<>(promise);
     }
 
     @Override
@@ -298,7 +269,7 @@ public class RedissonSortedSet<V> extends RedissonObject implements RSortedSet<V
                 return false;
             }
 
-            list.remove((int)res.getIndex());
+            list.remove((int) res.getIndex());
             return true;
         } finally {
             lock.unlock();
@@ -330,7 +301,7 @@ public class RedissonSortedSet<V> extends RedissonObject implements RSortedSet<V
     public boolean retainAll(Collection<?> c) {
         boolean changed = false;
         for (Iterator<?> iterator = iterator(); iterator.hasNext();) {
-            Object object = (Object) iterator.next();
+            Object object = iterator.next();
             if (!c.contains(object)) {
                 iterator.remove();
                 changed = true;
@@ -394,8 +365,12 @@ public class RedissonSortedSet<V> extends RedissonObject implements RSortedSet<V
         return res;
     }
 
+    private String getLockName() {
+        return prefixName("redisson_sortedset_lock", getRawName());
+    }
+
     private String getComparatorKeyName() {
-        return "redisson_sortedset_comparator:{" + getName() + "}";
+        return prefixName("redisson_sortedset_comparator", getRawName());
     }
 
     @Override
@@ -403,20 +378,68 @@ public class RedissonSortedSet<V> extends RedissonObject implements RSortedSet<V
         String className = comparator.getClass().getName();
         final String comparatorSign = className + ":" + calcClassSign(className);
 
-        Boolean res = commandExecutor.evalWrite(getName(), StringCodec.INSTANCE, RedisCommands.EVAL_BOOLEAN,
+        Boolean res = commandExecutor.get(commandExecutor.evalWriteAsync(list.getRawName(), StringCodec.INSTANCE, RedisCommands.EVAL_BOOLEAN,
                 "if redis.call('llen', KEYS[1]) == 0 then "
                 + "redis.call('set', KEYS[2], ARGV[1]); "
                 + "return 1; "
                 + "else "
                 + "return 0; "
                 + "end",
-                Arrays.<Object>asList(getName(), getComparatorKeyName()), comparatorSign);
+                Arrays.asList(list.getRawName(), getComparatorKeyName()), comparatorSign));
         if (res) {
             this.comparator = comparator;
         }
         return res;
     }
-    
+
+    @Override
+    public Iterator<V> distributedIterator(final int count) {
+        String iteratorName = "__redisson_sorted_set_cursor_{" + getRawName() + "}";
+        return distributedIterator(iteratorName, count);
+    }
+
+    @Override
+    public Iterator<V> distributedIterator(final String iteratorName, final int count) {
+        return new RedissonBaseIterator<V>() {
+
+            @Override
+            protected ScanResult<Object> iterator(RedisClient client, String nextIterPos) {
+                return distributedScanIterator(iteratorName, count);
+            }
+
+            @Override
+            protected void remove(Object value) {
+                RedissonSortedSet.this.remove(value);
+            }
+        };
+    }
+
+    private ScanResult<Object> distributedScanIterator(String iteratorName, int count) {
+        return get(distributedScanIteratorAsync(iteratorName, count));
+    }
+
+    private RFuture<ScanResult<Object>> distributedScanIteratorAsync(String iteratorName, int count) {
+        return commandExecutor.evalWriteAsync(list.getRawName(), codec, RedisCommands.EVAL_SCAN,
+                "local start_index = redis.call('get', KEYS[2]); "
+                + "if start_index ~= false then "
+                    + "start_index = tonumber(start_index); "
+                + "else "
+                    + "start_index = 0;"
+                + "end;"
+                + "if start_index == -1 then "
+                    + "return {'0', {}}; "
+                + "end;"
+                + "local end_index = start_index + ARGV[1];"
+                + "local result; "
+                + "result = redis.call('lrange', KEYS[1], start_index, end_index - 1); "
+                + "if end_index > redis.call('llen', KEYS[1]) then "
+                    + "end_index = -1;"
+                + "end; "
+                + "redis.call('setex', KEYS[2], 3600, end_index);"
+                + "return {tostring(end_index), result};",
+                Arrays.asList(list.getRawName(), iteratorName), count);
+    }
+
     // TODO optimize: get three values each time instead of single
     public BinarySearchResult<V> binarySearch(V value, Codec codec) {
         int size = list.size();
@@ -447,6 +470,7 @@ public class RedissonSortedSet<V> extends RedissonObject implements RSortedSet<V
         return indexRes;
     }
 
+    @SuppressWarnings("AvoidInlineConditionals")
     public String toString() {
         Iterator<V> it = iterator();
         if (! it.hasNext())
@@ -461,6 +485,26 @@ public class RedissonSortedSet<V> extends RedissonObject implements RSortedSet<V
                 return sb.append(']').toString();
             sb.append(',').append(' ');
         }
+    }
+
+    @Override
+    public RFuture<Boolean> deleteAsync() {
+        return deleteAsync(getRawName(), getComparatorKeyName(), getLockName());
+    }
+
+    @Override
+    public RFuture<Boolean> expireAsync(long timeToLive, TimeUnit timeUnit, String param, String... keys) {
+        return super.expireAsync(timeToLive, timeUnit, param, getRawName(), getComparatorKeyName(), getLockName());
+    }
+
+    @Override
+    protected RFuture<Boolean> expireAtAsync(long timestamp, String param, String... keys) {
+        return super.expireAtAsync(timestamp, param, getRawName(), getComparatorKeyName(), getLockName());
+    }
+
+    @Override
+    public RFuture<Boolean> clearExpireAsync() {
+        return clearExpireAsync(getRawName(), getComparatorKeyName(), getLockName());
     }
 
 }

@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,13 +15,12 @@
  */
 package org.redisson.api;
 
-import java.util.concurrent.TimeUnit;
-
 import org.redisson.client.RedisException;
 import org.redisson.client.codec.Codec;
+import org.redisson.codec.JsonCodec;
 
 /**
- * Interface for using pipeline feature.
+ * Interface for using Redis pipeline feature.
  * <p>
  * All method invocations on objects got through this interface 
  * are batched to separate queue and could be executed later
@@ -33,6 +32,28 @@ import org.redisson.client.codec.Codec;
  */
 public interface RBatch {
 
+    /**
+     * Returns stream instance by <code>name</code>
+     * 
+     * @param <K> type of key
+     * @param <V> type of value
+     * @param name of stream
+     * @return RStream object
+     */
+    <K, V> RStreamAsync<K, V> getStream(String name);
+    
+    /**
+     * Returns stream instance by <code>name</code>
+     * using provided <code>codec</code> for entries.
+     * 
+     * @param <K> type of key
+     * @param <V> type of value
+     * @param name - name of stream
+     * @param codec - codec for entry
+     * @return RStream object
+     */
+    <K, V> RStreamAsync<K, V> getStream(String name, Codec codec);
+    
     /**
      * Returns geospatial items holder instance by <code>name</code>.
      * 
@@ -171,6 +192,18 @@ public interface RBatch {
     <V> RBucketAsync<V> getBucket(String name, Codec codec);
 
     /**
+     * Returns JSON data holder instance by name using provided codec.
+     *
+     * @see org.redisson.codec.JacksonCodec
+     *
+     * @param <V> type of value
+     * @param name name of object
+     * @param codec codec for values
+     * @return JsonBucket object
+     */
+    <V> RJsonBucketAsync<V> getJsonBucket(String name, JsonCodec<V> codec);
+
+    /**
      * Returns HyperLogLog object
      *
      * @param <V> type of object
@@ -225,7 +258,7 @@ public interface RBatch {
      * @param name - name of object
      * @return ListMultimapCache object
      */
-    <K, V> RMultimapAsync<K, V> getListMultimapCache(String name);
+    <K, V> RMultimapCacheAsync<K, V> getListMultimapCache(String name);
     
     /**
      * Returns List based Multimap instance by name
@@ -240,7 +273,7 @@ public interface RBatch {
      * @param codec - codec for keys and values
      * @return ListMultimapCache object
      */
-    <K, V> RMultimapAsync<K, V> getListMultimapCache(String name, Codec codec);
+    <K, V> RMultimapCacheAsync<K, V> getListMultimapCache(String name, Codec codec);
     
     /**
      * Returns map instance by name.
@@ -268,13 +301,35 @@ public interface RBatch {
     /**
      * Returns topic instance by name.
      *
-     * @param <M> type of message
      * @param name - name of object
      * @return Topic object
      */
-    <M> RTopicAsync<M> getTopic(String name);
+    RTopicAsync getTopic(String name);
 
-    <M> RTopicAsync<M> getTopic(String name, Codec codec);
+    RTopicAsync getTopic(String name, Codec codec);
+
+    /**
+     * Returns Sharded Topic instance by name.
+     * <p>
+     * Messages are delivered to message listeners connected to the same Topic.
+     * <p>
+     *
+     * @param name - name of object
+     * @return Topic object
+     */
+    RShardedTopicAsync getShardedTopic(String name);
+
+    /**
+     * Returns Sharded Topic instance by name using provided codec for messages.
+     * <p>
+     * Messages are delivered to message listeners connected to the same Topic.
+     * <p>
+     *
+     * @param name - name of object
+     * @param codec - codec for message
+     * @return Topic object
+     */
+    RShardedTopicAsync getShardedTopic(String name, Codec codec);
 
     /**
      * Returns queue instance by name.
@@ -357,6 +412,12 @@ public interface RBatch {
      */
     RLexSortedSetAsync getLexSortedSet(String name);
 
+    /**
+     * Returns bitSet instance by name.
+     *
+     * @param name - name of object
+     * @return BitSet object
+     */
     RBitSetAsync getBitSet(String name);
 
     /**
@@ -365,6 +426,29 @@ public interface RBatch {
      * @return Script object
      */
     RScriptAsync getScript();
+
+    /**
+     * Returns script operations object using provided codec.
+     * 
+     * @param codec - codec for params and result
+     * @return Script object
+     */
+    RScriptAsync getScript(Codec codec);
+
+    /**
+     * Returns interface for Redis Function feature
+     *
+     * @return function object
+     */
+    RFunctionAsync getFunction();
+
+    /**
+     * Returns interface for Redis Function feature using provided codec
+     *
+     * @param codec - codec for params and result
+     * @return function interface
+     */
+    RFunctionAsync getFunction(Codec codec);
 
     /**
      * Returns keys operations.
@@ -396,90 +480,17 @@ public interface RBatch {
      */
     RFuture<BatchResult<?>> executeAsync();
 
-    /*
-     * Use {@link #skipResult()}
-     */
-    @Deprecated
-    void executeSkipResult();
-
-    /*
-     * Use {@link #skipResult()}
-     */
-    @Deprecated
-    RFuture<Void> executeSkipResultAsync();
-    
     /**
-     * Atomically executes all batched commands as a single command.
-     * <p>
-     * Please note, that in cluster mode all objects should be on the same cluster slot.
-     * https://github.com/antirez/redis/issues/3682 
-     * 
-     * @return
+     * Discard batched commands and release allocated buffers used for parameters encoding.
      */
-    RBatch atomic();
-    
-    /**
-     * Inform Redis not to send reply for this batch.
-     * Such approach saves network traffic.
-     * <p>
-     * NOTE: Redis 3.2+ required
-     * 
-     * @return self instance
-     */
-    RBatch skipResult();
-    
-    /**
-     * Synchronize write operations execution across defined amount 
-     * of Redis slave nodes within defined timeout.
-     * <p>
-     * NOTE: Redis 3.0+ required
-     * 
-     * @param slaves amount to sync
-     * @param timeout for sync operation
-     * @param unit value
-     * @return self instance
-     */
-    RBatch syncSlaves(int slaves, long timeout, TimeUnit unit);
-    
-    /**
-     * Defines timeout for Redis response. 
-     * Starts to countdown when Redis command has been successfully sent.
-     * <p>
-     * <code>0</code> value means use <code>Config.setTimeout</code> value instead.
-     * <p>
-     * Default is <code>0</code>
-     * 
-     * @param timeout value
-     * @param unit value
-     * @return self instance
-     */
-    RBatch timeout(long timeout, TimeUnit unit);
+    void discard();
 
     /**
-     * Defines time interval for each attempt to send Redis commands batch 
-     * if it hasn't been sent already.
-     * <p>
-     * <code>0</code> value means use <code>Config.setRetryInterval</code> value instead.
-     * <p>
-     * Default is <code>0</code>
-     * 
-     * @param retryInterval value
-     * @param unit value
-     * @return self instance
+     * Discard batched commands and release allocated buffers used for parameters encoding.
+     *
+     * @return void
      */
-    RBatch retryInterval(long retryInterval, TimeUnit unit);
+    RFuture<Void> discardAsync();
 
-    /**
-     * Defines attempts amount to re-send Redis commands batch
-     * if it hasn't been sent already.
-     * <p>
-     * <code>0</code> value means use <code>Config.setRetryAttempts</code> value instead.
-     * <p>
-     * Default is <code>0</code>
-     * 
-     * @param retryAttempts value
-     * @return self instance
-     */
-    RBatch retryAttempts(int retryAttempts);
-    
+
 }

@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,20 +15,24 @@
  */
 package org.redisson.cache;
 
+import org.redisson.misc.WrappedLock;
+
 /**
  * Created by jribble on 2/20/17.
  */
 
 public class StdCachedValue<K, V> implements CachedValue<K, V> {
 
-    protected final K key;
-    protected final V value;
+    private final K key;
+    private final V value;
 
-    long ttl;
-    long maxIdleTime;
+    private long ttl;
+    private long maxIdleTime;
 
-    long creationTime;
-    long lastAccess;
+    private long creationTime;
+    private long lastAccess;
+
+    private final WrappedLock lock = new WrappedLock();
 
     public StdCachedValue(K key, V value, long ttl, long maxIdleTime) {
         this.value = value;
@@ -73,4 +77,8 @@ public class StdCachedValue<K, V> implements CachedValue<K, V> {
         return "CachedValue [key=" + key + ", value=" + value + "]";
     }
 
+    @Override
+    public WrappedLock getLock() {
+        return lock;
+    }
 }

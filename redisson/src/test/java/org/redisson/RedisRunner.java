@@ -16,7 +16,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 import org.redisson.client.RedisClient;
 import org.redisson.client.RedisClientConfig;
@@ -29,6 +32,7 @@ import org.redisson.client.protocol.convertor.VoidReplayConvertor;
  *
  * @author Rui Gu (https://github.com/jackygurui)
  */
+@Deprecated
 public class RedisRunner {
 
     public enum REDIS_OPTIONS {
@@ -198,7 +202,7 @@ public class RedisRunner {
     private boolean randomDir = false;
     private ArrayList<String> bindAddr = new ArrayList<>();
     private int port = 6379;
-    private int retryCount = Integer.MAX_VALUE;
+    private int retryCount = 10;
     private boolean randomPort = false;
     private String sentinelFile;
     private String clusterFile;
@@ -241,7 +245,7 @@ public class RedisRunner {
             String line;
             try {
                 while (p.isAlive() && (line = reader.readLine()) != null && !RedissonRuntimeEnvironment.isTravis) {
-                    System.out.println("REDIS PROCESS: " + line);
+//                    System.out.println("REDIS PROCESS: " + line);
                 }
             } catch (IOException ex) {
                 System.out.println("Exception: " + ex.getLocalizedMessage());
@@ -291,7 +295,16 @@ public class RedisRunner {
             throw new FailedToStartRedisException();
         }
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            rp.stop();
+            if (RedissonRuntimeEnvironment.isWindows
+                    && RedissonRuntimeEnvironment.redisBinaryPath.contains("cmd")) {
+                try {
+                    Runtime.getRuntime().exec("C:\\redis\\redis-server-stop.cmd");
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            } else {
+                rp.stop();
+            }
         }));
         return rp;
     }
@@ -474,7 +487,7 @@ public class RedisRunner {
         makeRandomDefaultDir();
         
         
-        addConfigOption(REDIS_OPTIONS.DIR, "\"" + defaultDir + "\"");
+        addConfigOption(REDIS_OPTIONS.DIR, defaultDir);
         return this;
     }
 
@@ -878,7 +891,7 @@ public class RedisRunner {
 
     public static final class RedisProcess {
 
-        private final Process redisProcess;
+        private Process redisProcess;
         private final RedisRunner runner;
         private RedisVersion redisVersion;
         
@@ -887,15 +900,17 @@ public class RedisRunner {
             this.runner = runner;
         }
 
-        public int stop() {
+        public void restart(int startTimeout) {
             if (runner.isNosave() && !runner.isRandomDir()) {
                 RedisClient c = createDefaultRedisClientInstance();
                 RedisConnection connection = c.connect();
                 try {
                     connection.async(new RedisStrictCommand<Void>("SHUTDOWN", "NOSAVE", new VoidReplayConvertor()))
-                            .await(3, TimeUnit.SECONDS);
+                            .toCompletableFuture().get(3, TimeUnit.SECONDS);
                 } catch (InterruptedException interruptedException) {
                     //shutdown via command failed, lets wait and kill it later.
+                } catch (ExecutionException | TimeoutException e) {
+                    // skip
                 }
                 c.shutdown();
                 connection.closeAsync().syncUninterruptibly();
@@ -911,6 +926,43 @@ public class RedisRunner {
             if (!normalTermination) {
                 p = p.destroyForcibly();
             }
+            
+            Executors.newScheduledThreadPool(1).schedule(() -> {
+                try {
+                    redisProcess = runner.run().redisProcess;
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }, startTimeout, TimeUnit.SECONDS);
+        }
+        
+        public int stop() {
+            if (runner.isNosave()) {
+                RedisClientConfig config = new RedisClientConfig();
+                config.setConnectTimeout(1000);
+                config.setAddress(runner.getInitialBindAddr(), runner.getPort());
+                RedisClient c = RedisClient.create(config);
+
+                RedisConnection connection = null;
+                try {
+                    connection = c.connect();
+                    connection.async(new RedisStrictCommand<Void>("SHUTDOWN", "NOSAVE", new VoidReplayConvertor()));
+                } catch (Exception e) {
+                    // skip
+                }
+                c.shutdown();
+            }
+            Process p = redisProcess;
+            p.destroy();
+//            boolean normalTermination = false;
+//            try {
+//                normalTermination = p.waitFor(5, TimeUnit.SECONDS);
+//            } catch (InterruptedException ex) {
+//                //OK lets hurry up by force kill;
+//            }
+//            if (!normalTermination) {
+//                p = p.destroyForcibly();
+//            }
             cleanup();
             int exitCode = p.exitValue();
             return exitCode == 1 && RedissonRuntimeEnvironment.isWindows ? 0 : exitCode;

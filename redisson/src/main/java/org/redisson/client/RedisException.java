@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,10 @@ public class RedisException extends RuntimeException {
     private static final long serialVersionUID = 3389820652701696154L;
 
     public RedisException() {
+    }
+
+    public RedisException(Throwable cause) {
+        super(cause);
     }
 
     public RedisException(String message, Throwable cause) {

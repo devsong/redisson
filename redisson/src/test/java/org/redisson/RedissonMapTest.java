@@ -1,43 +1,64 @@
 package org.redisson;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import org.assertj.core.api.Assertions;
+import org.junit.jupiter.api.Test;
+import org.redisson.api.MapOptions;
+import org.redisson.api.MapOptions.WriteMode;
+import org.redisson.api.RMap;
+import org.redisson.client.codec.Codec;
 
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
 
-import org.junit.Assert;
-import org.junit.Test;
-import org.redisson.api.MapOptions;
-import org.redisson.api.RMap;
-import org.redisson.client.codec.Codec;
-import org.redisson.codec.JsonJacksonCodec;
+import static org.assertj.core.api.Assertions.assertThat;
 
 public class RedissonMapTest extends BaseMapTest {
 
-    @Override
+        @Override
     protected <K, V> RMap<K, V> getMap(String name) {
         return redisson.getMap(name);
     }
-    
-    @Override
+
+        @Override
     protected <K, V> RMap<K, V> getMap(String name, Codec codec) {
         return redisson.getMap(name, codec);
     }
-    
+
     @Override
-    protected <K, V> RMap<K, V> getLoaderTestMap(String name, Map<K, V> map) {
+    protected <K, V, M extends RMap<K, V>> M getLoaderTestMap(String name, Map<K, V> map) {
         MapOptions<K, V> options = MapOptions.<K, V>defaults().loader(createMapLoader(map));
+        return (M) redisson.getMap("test", options);
+    }
+
+    @Override
+    protected <K, V> RMap<K, V> getLoaderAsyncTestMap(String name, Map<K, V> map) {
+        MapOptions<K, V> options = MapOptions.<K, V>defaults().loaderAsync(createMapLoaderAsync(map));
         return redisson.getMap("test", options);
     }
-    
+
     @Override
     protected <K, V> RMap<K, V> getWriterTestMap(String name, Map<K, V> map) {
         MapOptions<K, V> options = MapOptions.<K, V>defaults().writer(createMapWriter(map));
         return redisson.getMap("test", options);        
     }
-            
+    
+    @Override
+    protected <K, V> RMap<K, V> getWriteBehindTestMap(String name, Map<K, V> map) {
+        MapOptions<K, V> options = MapOptions.<K, V>defaults()
+                                    .writer(createMapWriter(map))
+                                    .writeMode(WriteMode.WRITE_BEHIND);
+        return redisson.getMap("test", options);        
+    }
+
+    @Override
+    protected <K, V> RMap<K, V> getWriteBehindAsyncTestMap(String name, Map<K, V> map) {
+        MapOptions<K, V> options = MapOptions.<K, V>defaults()
+                .writerAsync(createMapWriterAsync(map))
+                .writeMode(WriteMode.WRITE_BEHIND);
+        return redisson.getMap("test", options);
+    }
 
     @Test
     public void testEntrySet() {
@@ -48,7 +69,7 @@ public class RedissonMapTest extends BaseMapTest {
 
         assertThat(map.entrySet().size()).isEqualTo(3);
         Map<Integer, String> testMap = new HashMap<Integer, String>(map);
-        assertThat(map.entrySet()).containsOnlyElementsOf(testMap.entrySet());
+        assertThat(map.entrySet()).containsExactlyElementsOf(testMap.entrySet());
     }
 
     @Test
@@ -60,7 +81,7 @@ public class RedissonMapTest extends BaseMapTest {
 
         assertThat(map.readAllEntrySet().size()).isEqualTo(3);
         Map<Integer, String> testMap = new HashMap<Integer, String>(map);
-        assertThat(map.readAllEntrySet()).containsOnlyElementsOf(testMap.entrySet());
+        assertThat(map.readAllEntrySet()).containsExactlyElementsOf(testMap.entrySet());
     }
 
     @Test
@@ -73,7 +94,7 @@ public class RedissonMapTest extends BaseMapTest {
         String val = map.get(2);
         assertThat(val).isEqualTo("33");
     }
-    
+
     @Test
     public void testKeySet() {
         Map<SimpleKey, SimpleValue> map = redisson.getMap("simple");
@@ -81,8 +102,7 @@ public class RedissonMapTest extends BaseMapTest {
         map.put(new SimpleKey("33"), new SimpleValue("44"));
         map.put(new SimpleKey("5"), new SimpleValue("6"));
 
-        Assert.assertTrue(map.keySet().contains(new SimpleKey("33")));
-        Assert.assertFalse(map.keySet().contains(new SimpleKey("44")));
+        assertThat(map.keySet()).containsOnly(new SimpleKey("33"), new SimpleKey("1"), new SimpleKey("5"));
     }
     
     @Test
@@ -98,11 +118,11 @@ public class RedissonMapTest extends BaseMapTest {
         for (Iterator<Integer> iterator = map.keySet().iterator(); iterator.hasNext();) {
             Integer value = iterator.next();
             if (!keys.remove(value)) {
-                Assert.fail();
+                Assertions.fail("value can't be removed");
             }
         }
 
         assertThat(keys.size()).isEqualTo(0);
     }
 
-}
+            }

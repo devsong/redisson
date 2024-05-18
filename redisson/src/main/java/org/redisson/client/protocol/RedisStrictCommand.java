@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -53,14 +53,6 @@ public class RedisStrictCommand<T> extends RedisCommand<T> {
     public RedisStrictCommand(String name, String subName, MultiDecoder<T> replayMultiDecoder, Convertor convertor) {
         super(name, subName, replayMultiDecoder);
         this.convertor = convertor;
-    }
-
-    public RedisStrictCommand(String name, String subName, Decoder<T> reponseDecoder) {
-        super(name, subName, null, reponseDecoder);
-    }
-
-    public RedisStrictCommand(String name, Decoder<T> reponseDecoder) {
-        super(name, reponseDecoder);
     }
 
 }

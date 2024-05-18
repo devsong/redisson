@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,8 +16,10 @@
 package org.redisson.api;
 
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import org.redisson.api.Node.InfoSection;
+import org.redisson.client.protocol.Time;
 
 /**
  * Redis node interface
@@ -25,14 +27,24 @@ import org.redisson.api.Node.InfoSection;
  * @author Nikita Koksharov
  *
  */
+@Deprecated
 public interface NodeAsync {
 
     RFuture<Map<String, String>> infoAsync(InfoSection section);
     
-    RFuture<Long> timeAsync();
+    RFuture<Time> timeAsync();
     
     RFuture<Boolean> pingAsync();
 
+    /**
+     * Ping Redis node with specified timeout.
+     *
+     * @param timeout - ping timeout
+     * @param timeUnit - timeout unit
+     * @return <code>true</code> if "PONG" reply received, <code>false</code> otherwise
+     */
+    RFuture<Boolean> pingAsync(long timeout, TimeUnit timeUnit);
+    
     RFuture<Map<String, String>> clusterInfoAsync();
     
 }

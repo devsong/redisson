@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,18 +29,21 @@ public class PubSubMessageListener<V> implements RedisPubSubListener<Object> {
 
     private final MessageListener<V> listener;
     private final String name;
+    private final Class<V> type;
 
     public String getName() {
         return name;
     }
 
-    public PubSubMessageListener(MessageListener<V> listener, String name) {
+    public PubSubMessageListener(Class<V> type, MessageListener<V> listener, String name) {
         super();
+        this.type = type;
         this.listener = listener;
         this.name = name;
     }
 
     @Override
+    @SuppressWarnings("AvoidInlineConditionals")
     public int hashCode() {
         final int prime = 31;
         int result = 1;
@@ -68,26 +71,25 @@ public class PubSubMessageListener<V> implements RedisPubSubListener<Object> {
     public MessageListener<V> getListener() {
         return listener;
     }
-
+    
     @Override
-    public void onMessage(String channel, Object message) {
+    public void onMessage(CharSequence channel, Object message) {
         // could be subscribed to multiple channels
-        if (name.equals(channel)) {
-            listener.onMessage(channel, (V)message);
+        if (name.equals(channel.toString()) && type.isInstance(message)) {
+            listener.onMessage(channel, (V) message);
         }
     }
 
     @Override
-    public void onPatternMessage(String pattern, String channel, Object message) {
+    public void onPatternMessage(CharSequence pattern, CharSequence channel, Object message) {
         // could be subscribed to multiple channels
-        if (name.equals(pattern)) {
-            listener.onMessage(channel, (V)message);
+        if (name.equals(pattern.toString()) && type.isInstance(message)) {
+            listener.onMessage(channel, (V) message);
         }
     }
 
     @Override
-    public boolean onStatus(PubSubType type, String channel) {
-        return false;
+    public void onStatus(PubSubType type, CharSequence channel) {
     }
 
 }

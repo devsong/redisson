@@ -18,6 +18,7 @@ import org.redisson.misc.BiHashMap;
  *
  * @author Rui Gu (https://github.com/jackygurui)
  */
+@Deprecated
 public class ClusterRunner {
     
     private final LinkedHashMap<RedisRunner, String> nodes = new LinkedHashMap<>();
@@ -64,12 +65,23 @@ public class ClusterRunner {
             }
             processes.put(nodes.get(runner), runner.clusterConfigFile(confFile).run());
         }
-        Thread.sleep(1000);
-        for (RedisRunner.RedisProcess process : processes.valueSet()) {
-            if (!process.isAlive()) {
-                throw new RedisRunner.FailedToStartRedisException();
+
+        boolean allAlive = true;
+        for (int i = 0; i < 15; i++) {
+            for (RedisRunner.RedisProcess process : processes.valueSet()) {
+                allAlive &= process.isAlive();
             }
+            if (allAlive) {
+                break;
+            }
+            allAlive = true;
+            Thread.sleep(100);
         }
+        if (!allAlive) {
+            throw new RedisRunner.FailedToStartRedisException();
+        }
+        Thread.sleep(1000);
+
         return new ClusterProcesses(processes);
     }
     

@@ -6,63 +6,65 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 
-import org.junit.Test;
-import org.redisson.RedisRunner;
-import org.redisson.RedisRunner.RedisProcess;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+import org.redisson.RedisDockerTest;
 import org.redisson.Redisson;
 import org.redisson.api.RedissonClient;
+import org.redisson.client.WriteRedisConnectionException;
 import org.redisson.config.Config;
 import org.redisson.config.ReadMode;
+import org.testcontainers.containers.GenericContainer;
 
-public class WeightedRoundRobinBalancerTest {
+public class WeightedRoundRobinBalancerTest extends RedisDockerTest {
 
     @Test
-    public void testUseMasterForReadsIfNoConnectionsToSlaves() throws IOException, InterruptedException {
-        RedisProcess master = null;
-        RedisProcess slave = null;
-        RedissonClient client = null;
-        try {
-            master = redisTestInstance();
-            slave = redisTestInstance();
+    public void testUseMasterForReadsIfNoConnectionsToSlaves() {
+            GenericContainer<?> master = null;
+            GenericContainer<?> slave = null;
+            RedissonClient client = null;
+            try {
+                master = createRedis();
+                master.start();
+                slave = createRedis();
+                slave.start();
 
-            Map<String, Integer> weights = new HashMap<>();
-            weights.put(master.getRedisServerAddressAndPort(), 1);
-            weights.put(slave.getRedisServerAddressAndPort(), 2);
+                String masterurl = "redis://" + master.getHost() + ":" + master.getFirstMappedPort();
+                String slaveurl = "redis://" + slave.getHost() + ":" + slave.getFirstMappedPort();
 
-            Config config = new Config();
-            config.useMasterSlaveServers()
-                .setReadMode(ReadMode.SLAVE)
-                .setMasterAddress(master.getRedisServerAddressAndPort())
-                .addSlaveAddress(slave.getRedisServerAddressAndPort())
-                .setLoadBalancer(new WeightedRoundRobinBalancer(weights, 1));
+                Map<String, Integer> weights = new HashMap<>();
+                weights.put(masterurl, 1);
+                weights.put(slaveurl, 2);
 
-            client = Redisson.create(config);
+                Config config = new Config();
+                config.useMasterSlaveServers()
+                        .setReadMode(ReadMode.SLAVE)
+                        .setMasterAddress(masterurl)
+                        .addSlaveAddress(slaveurl)
+                        .setLoadBalancer(new WeightedRoundRobinBalancer(weights, 1));
 
-            // To simulate network connection issues to slave, stop the slave
-            // after creating the client. Cannot create the client without the
-            // slave running. See https://github.com/mrniko/redisson/issues/580
-            slave.stop();
+                client = Redisson.create(config);
 
-            RedissonClient clientCopy = client;
-            assertThat(clientCopy.getBucket("key").get()).isNull();
-        } finally {
-            if (master != null) {
-                master.stop();
-            }
-            if (slave != null) {
+                // To simulate network connection issues to slave, stop the slave
+                // after creating the client. Cannot create the client without the
+                // slave running. See https://github.com/mrniko/redisson/issues/580
                 slave.stop();
+
+                RedissonClient clientCopy = client;
+                Assertions.assertThrows(WriteRedisConnectionException.class, () -> {
+                    clientCopy.getBucket("key").get();
+                });
+            } finally {
+                if (master != null) {
+                    master.stop();
+                }
+                if (slave != null) {
+                    slave.stop();
+                }
+                if (client != null) {
+                    client.shutdown();
+                }
             }
-            if (client != null) {
-                client.shutdown();
-            }
-        }
     }
 
-    private RedisProcess redisTestInstance() throws IOException, InterruptedException {
-        return new RedisRunner()
-                .nosave()
-                .randomDir()
-                .randomPort()
-                .run();
-    }
 }

@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,14 +15,13 @@
  */
 package org.redisson.api;
 
-import java.util.concurrent.TimeUnit;
-
-import org.reactivestreams.Publisher;
 import org.redisson.client.codec.Codec;
+import org.redisson.codec.JsonCodec;
+import reactor.core.publisher.Mono;
 
 /**
- * Interface for using pipeline feature.
- *
+ * Reactive interface for Redis pipeline feature.
+ * <p>
  * All method invocations on objects
  * from this interface are batched to separate queue and could be executed later
  * with <code>execute()</code> method.
@@ -33,6 +32,74 @@ import org.redisson.client.codec.Codec;
  */
 public interface RBatchReactive {
 
+    /**
+     * Returns stream instance by <code>name</code>
+     * <p>
+     * Requires <b>Redis 5.0.0 and higher.</b>
+     * 
+     * @param <K> type of key
+     * @param <V> type of value
+     * @param name of stream
+     * @return RStream object
+     */
+    <K, V> RStreamReactive<K, V> getStream(String name);
+    
+    /**
+     * Returns stream instance by <code>name</code>
+     * using provided <code>codec</code> for entries.
+     * <p>
+     * Requires <b>Redis 5.0.0 and higher.</b>
+     * 
+     * @param <K> type of key
+     * @param <V> type of value
+     * @param name - name of stream
+     * @param codec - codec for entry
+     * @return RStream object
+     */
+    <K, V> RStreamReactive<K, V> getStream(String name, Codec codec);
+    
+    /**
+     * Returns geospatial items holder instance by <code>name</code>.
+     * 
+     * @param <V> type of value
+     * @param name - name of object
+     * @return Geo object
+     */
+    <V> RGeoReactive<V> getGeo(String name);
+    
+    /**
+     * Returns geospatial items holder instance by <code>name</code>
+     * using provided codec for geospatial members.
+     * 
+     * @param <V> type of value
+     * @param name - name of object
+     * @param codec - codec for value
+     * @return Geo object
+     */
+    <V> RGeoReactive<V> getGeo(String name, Codec codec);
+    
+    /**
+     * Returns Set based Multimap instance by name.
+     * 
+     * @param <K> type of key
+     * @param <V> type of value
+     * @param name - name of object
+     * @return SetMultimap object
+     */
+    <K, V> RSetMultimapReactive<K, V> getSetMultimap(String name);
+
+    /**
+     * Returns Set based Multimap instance by name
+     * using provided codec for both map keys and values.
+     *
+     * @param <K> type of key
+     * @param <V> type of value
+     * @param name - name of object
+     * @param codec - codec for keys and values
+     * @return SetMultimap object
+     */
+    <K, V> RSetMultimapReactive<K, V> getSetMultimap(String name, Codec codec);
+    
     /**
      * Returns set-based cache instance by <code>name</code>.
      * Uses map (value_hash, value) under the hood for minimal memory consumption.
@@ -101,6 +168,18 @@ public interface RBatchReactive {
     <V> RBucketReactive<V> getBucket(String name, Codec codec);
 
     /**
+     * Returns JSON data holder instance by name using provided codec.
+     *
+     * @see org.redisson.codec.JacksonCodec
+     *
+     * @param <V> type of value
+     * @param name name of object
+     * @param codec codec for values
+     * @return JsonBucket object
+     */
+    <V> RJsonBucketReactive<V> getJsonBucket(String name, JsonCodec<V> codec);
+
+    /**
      * Returns HyperLogLog object by name
      *
      * @param <V> type of value
@@ -122,6 +201,28 @@ public interface RBatchReactive {
 
     <V> RListReactive<V> getList(String name, Codec codec);
 
+    /**
+     * Returns List based MultiMap instance by name.
+     *
+     * @param <K> type of key
+     * @param <V> type of value
+     * @param name - name of object
+     * @return ListMultimap object
+     */
+    <K, V> RListMultimapReactive<K, V> getListMultimap(String name);
+
+    /**
+     * Returns List based MultiMap instance by name
+     * using provided codec for both map keys and values.
+     *
+     * @param <K> type of key
+     * @param <V> type of value
+     * @param name - name of object
+     * @param codec - codec for keys and values
+     * @return ListMultimap object
+     */
+    <K, V> RListMultimapReactive<K, V> getListMultimap(String name, Codec codec);
+    
     /**
      * Returns map instance by name.
      *
@@ -148,13 +249,35 @@ public interface RBatchReactive {
     /**
      * Returns topic instance by name.
      *
-     * @param <M> type of message
      * @param name - name of object
      * @return Topic object
      */
-    <M> RTopicReactive<M> getTopic(String name);
+    RTopicReactive getTopic(String name);
 
-    <M> RTopicReactive<M> getTopic(String name, Codec codec);
+    RTopicReactive getTopic(String name, Codec codec);
+
+    /**
+     * Returns Sharded Topic instance by name.
+     * <p>
+     * Messages are delivered to message listeners connected to the same Topic.
+     * <p>
+     *
+     * @param name - name of object
+     * @return Topic object
+     */
+    RShardedTopicReactive getShardedTopic(String name);
+
+    /**
+     * Returns Sharded Topic instance by name using provided codec for messages.
+     * <p>
+     * Messages are delivered to message listeners connected to the same Topic.
+     * <p>
+     *
+     * @param name - name of object
+     * @param codec - codec for message
+     * @return Topic object
+     */
+    RShardedTopicReactive getShardedTopic(String name, Codec codec);
 
     /**
      * Returns queue instance by name.
@@ -179,15 +302,26 @@ public interface RBatchReactive {
     <V> RBlockingQueueReactive<V> getBlockingQueue(String name, Codec codec);
 
     /**
+     * Returns blocking deque instance by name.
+     * 
+     * @param <V> type of value
+     * @param name - name of object
+     * @return BlockingDeque object
+     */
+    <V> RBlockingDequeReactive<V> getBlockingDeque(String name);
+
+    <V> RBlockingDequeReactive<V> getBlockingDeque(String name, Codec codec);
+    
+    /**
      * Returns deque instance by name.
      * 
      * @param <V> type of value
      * @param name - name of object
      * @return Deque object
      */
-    <V> RDequeReactive<V> getDequeReactive(String name);
+    <V> RDequeReactive<V> getDeque(String name);
 
-    <V> RDequeReactive<V> getDequeReactive(String name, Codec codec);
+    <V> RDequeReactive<V> getDeque(String name, Codec codec);
 
     /**
      * Returns "atomic long" instance by name.
@@ -195,8 +329,16 @@ public interface RBatchReactive {
      * @param name - name of object
      * @return AtomicLong object
      */
-    RAtomicLongReactive getAtomicLongReactive(String name);
+    RAtomicLongReactive getAtomicLong(String name);
 
+    /**
+     * Returns atomicDouble instance by name.
+     *
+     * @param name - name of object
+     * @return AtomicDouble object
+     */
+    RAtomicDoubleReactive getAtomicDouble(String name);
+    
     /**
      * Returns Redis Sorted Set instance by name
      * 
@@ -234,6 +376,29 @@ public interface RBatchReactive {
     RScriptReactive getScript();
 
     /**
+     * Returns script operations object using provided codec.
+     * 
+     * @param codec - codec for params and result
+     * @return Script object
+     */
+    RScriptReactive getScript(Codec codec);
+
+    /**
+     * Returns interface for Redis Function feature
+     *
+     * @return function object
+     */
+    RFunctionReactive getFunction();
+
+    /**
+     * Returns interface for Redis Function feature using provided codec
+     *
+     * @param codec - codec for params and result
+     * @return function interface
+     */
+    RFunctionReactive getFunction(Codec codec);
+
+    /**
      * Returns keys operations.
      * Each of Redis/Redisson object associated with own key
      *
@@ -249,68 +414,13 @@ public interface RBatchReactive {
      *
      * @return List with result object for each command
      */
-    Publisher<BatchResult<?>> execute();
+    Mono<BatchResult<?>> execute();
 
     /**
-     * Command replies are skipped such approach saves response bandwidth.
-     * <p>
-     * NOTE: Redis 3.2+ required
-     * 
-     * @return self instance
+     * Discard batched commands and release allocated buffers used for parameters encoding.
+     *
+     * @return void
      */
-    RBatchReactive skipResult();
-    
-    /**
-     * 
-     * <p>
-     * NOTE: Redis 3.0+ required
-     * 
-     * @param slaves number to sync
-     * @param timeout for sync operation
-     * @param unit value
-     * @return self instance
-     */
-    RBatchReactive syncSlaves(int slaves, long timeout, TimeUnit unit);
-    
-    /**
-     * Defines timeout for Redis response. 
-     * Starts to countdown when Redis command has been successfully sent.
-     * <p>
-     * <code>0</code> value means use <code>Config.setTimeout</code> value instead.
-     * <p>
-     * Default is <code>0</code>
-     * 
-     * @param timeout value
-     * @param unit value
-     * @return self instance
-     */
-    RBatchReactive timeout(long timeout, TimeUnit unit);
+    Mono<Void> discard();
 
-    /**
-     * Defines time interval for another one attempt send Redis commands batch 
-     * if it hasn't been sent already.
-     * <p>
-     * <code>0</code> value means use <code>Config.setRetryInterval</code> value instead.
-     * <p>
-     * Default is <code>0</code>
-     * 
-     * @param retryInterval value
-     * @param unit value
-     * @return self instance
-     */
-    RBatchReactive retryInterval(long retryInterval, TimeUnit unit);
-
-    /**
-     * Defines attempts amount to re-send Redis commands batch
-     * if it hasn't been sent already.
-     * <p>
-     * <code>0</code> value means use <code>Config.setRetryAttempts</code> value instead.
-     * <p>
-     * Default is <code>0</code>
-     * 
-     * @param retryAttempts value
-     * @return self instance
-     */
-    RBatchReactive retryAttempts(int retryAttempts);
-    
 }

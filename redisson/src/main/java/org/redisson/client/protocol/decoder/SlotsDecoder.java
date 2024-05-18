@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.redisson.client.codec.Codec;
 import org.redisson.client.codec.StringCodec;
 import org.redisson.client.handler.State;
 import org.redisson.client.protocol.Decoder;
@@ -35,22 +36,22 @@ import org.redisson.cluster.ClusterSlotRange;
 public class SlotsDecoder implements MultiDecoder<Object> {
 
     @Override
-    public Decoder<Object> getDecoder(int paramNum, State state) {
+    public Decoder<Object> getDecoder(Codec codec, int paramNum, State state, long size) {
         return StringCodec.INSTANCE.getValueDecoder();
     }
     
     @Override
     public Object decode(List<Object> parts, State state) {
-        if (parts.size() > 2 && parts.get(0) instanceof List) {
-            Map<ClusterSlotRange, Set<String>> result = new HashMap<ClusterSlotRange, Set<String>>();
-            List<List<Object>> rows = (List<List<Object>>)(Object)parts;
+        if (!parts.isEmpty() && parts.get(0) instanceof List) {
+            Map<ClusterSlotRange, Set<String>> result = new HashMap<>();
+            List<List<Object>> rows = (List<List<Object>>) (Object) parts;
             for (List<Object> row : rows) {
                 Iterator<Object> iterator = row.iterator();
-                Long startSlot = (Long)iterator.next();
-                Long endSlot = (Long)iterator.next();
+                Long startSlot = (Long) iterator.next();
+                Long endSlot = (Long) iterator.next();
                 ClusterSlotRange range = new ClusterSlotRange(startSlot.intValue(), endSlot.intValue());
-                Set<String> addresses = new HashSet<String>();
-                while(iterator.hasNext()) {
+                Set<String> addresses = new HashSet<>();
+                while (iterator.hasNext()) {
                     List<Object> addressParts = (List<Object>) iterator.next();
                     addresses.add(addressParts.get(0) + ":" + addressParts.get(1));
                 }

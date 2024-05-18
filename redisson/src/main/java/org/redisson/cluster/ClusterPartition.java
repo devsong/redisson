@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,10 +15,12 @@
  */
 package org.redisson.cluster;
 
-import java.net.URI;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.Set;
+import org.redisson.misc.RedisURI;
+
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+
+import static org.redisson.connection.MasterSlaveConnectionManager.MAX_SLOT;
 
 /**
  * 
@@ -33,12 +35,12 @@ public class ClusterPartition {
     
     private final String nodeId;
     private boolean masterFail;
-    private URI masterAddress;
-    private final Set<URI> slaveAddresses = new HashSet<URI>();
-    private final Set<URI> failedSlaves = new HashSet<URI>();
-    
-    private final Set<Integer> slots = new HashSet<Integer>();
-    private final Set<ClusterSlotRange> slotRanges = new HashSet<ClusterSlotRange>();
+    private RedisURI masterAddress;
+    private final Set<RedisURI> slaveAddresses = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    private final Set<RedisURI> failedSlaves = Collections.newSetFromMap(new ConcurrentHashMap<>());
+
+    private BitSet slots;
+    private Set<ClusterSlotRange> slotRanges = Collections.emptySet();
 
     private ClusterPartition parent;
     
@@ -74,88 +76,82 @@ public class ClusterPartition {
         return masterFail;
     }
 
-    public void addSlots(Set<Integer> slots) {
-        this.slots.addAll(slots);
+    public void updateSlotRanges(Set<ClusterSlotRange> ranges, BitSet slots) {
+        this.slotRanges = ranges;
+        this.slots = slots;
     }
 
-    public void removeSlots(Set<Integer> slots) {
-        this.slots.removeAll(slots);
+    public void setSlotRanges(Set<ClusterSlotRange> ranges) {
+        slots = new BitSet(MAX_SLOT);
+        for (ClusterSlotRange clusterSlotRange : ranges) {
+            slots.set(clusterSlotRange.getStartSlot(), clusterSlotRange.getEndSlot() + 1);
+        }
+        slotRanges = ranges;
     }
 
-    public void addSlotRanges(Set<ClusterSlotRange> ranges) {
-        for (ClusterSlotRange clusterSlotRange : ranges) {
-            for (int i = clusterSlotRange.getStartSlot(); i < clusterSlotRange.getEndSlot() + 1; i++) {
-                slots.add(i);
-            }
-        }
-        slotRanges.addAll(ranges);
-    }
-    public void removeSlotRanges(Set<ClusterSlotRange> ranges) {
-        for (ClusterSlotRange clusterSlotRange : ranges) {
-            for (int i = clusterSlotRange.getStartSlot(); i < clusterSlotRange.getEndSlot() + 1; i++) {
-                slots.remove(i);
-            }
-        }
-        slotRanges.removeAll(ranges);
-    }
     public Set<ClusterSlotRange> getSlotRanges() {
-        return slotRanges;
+        return Collections.unmodifiableSet(slotRanges);
     }
-    public Set<Integer> getSlots() {
+
+    public Iterable<Integer> getSlots() {
+        return slots.stream()::iterator;
+    }
+    
+    public BitSet slots() {
         return slots;
     }
+    
+    public BitSet copySlots() {
+        return (BitSet) slots.clone();
+    }
+    
+    public boolean hasSlot(int slot) {
+        return slots.get(slot);
+    }
+    
+    public int getSlotsAmount() {
+        return slots.cardinality();
+    }
 
-    public URI getMasterAddress() {
+    public RedisURI getMasterAddress() {
         return masterAddress;
     }
-    public void setMasterAddress(URI masterAddress) {
+    public void setMasterAddress(RedisURI masterAddress) {
         this.masterAddress = masterAddress;
     }
 
-    public void addFailedSlaveAddress(URI address) {
+    public void addFailedSlaveAddress(RedisURI address) {
         failedSlaves.add(address);
     }
-    public Set<URI> getFailedSlaveAddresses() {
+    public Set<RedisURI> getFailedSlaveAddresses() {
         return Collections.unmodifiableSet(failedSlaves);
     }
-    public void removeFailedSlaveAddress(URI uri) {
+    public void removeFailedSlaveAddress(RedisURI uri) {
         failedSlaves.remove(uri);
     }
 
-    public void addSlaveAddress(URI address) {
+    public void addSlaveAddress(RedisURI address) {
         slaveAddresses.add(address);
     }
-    public Set<URI> getSlaveAddresses() {
+    public Set<RedisURI> getSlaveAddresses() {
         return Collections.unmodifiableSet(slaveAddresses);
     }
-    public void removeSlaveAddress(URI uri) {
+    public void removeSlaveAddress(RedisURI uri) {
         slaveAddresses.remove(uri);
         failedSlaves.remove(uri);
     }
     
     @Override
     public int hashCode() {
-        final int prime = 31;
-        int result = 1;
-        result = prime * result + ((nodeId == null) ? 0 : nodeId.hashCode());
-        return result;
+        return Objects.hash(nodeId);
     }
 
     @Override
-    public boolean equals(Object obj) {
-        if (this == obj)
-            return true;
-        if (obj == null)
-            return false;
-        if (getClass() != obj.getClass())
-            return false;
-        ClusterPartition other = (ClusterPartition) obj;
-        if (nodeId == null) {
-            if (other.nodeId != null)
-                return false;
-        } else if (!nodeId.equals(other.nodeId))
-            return false;
-        return true;
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        ClusterPartition that = (ClusterPartition) o;
+        return Objects.equals(nodeId, that.nodeId);
     }
 
     @Override

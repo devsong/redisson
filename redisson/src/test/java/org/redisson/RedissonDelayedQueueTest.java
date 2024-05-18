@@ -1,16 +1,16 @@
 package org.redisson;
 
-import static org.assertj.core.api.Assertions.assertThat;
-
-import java.util.Arrays;
-import java.util.concurrent.TimeUnit;
-
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.redisson.api.RBlockingQueue;
 import org.redisson.api.RDelayedQueue;
 import org.redisson.api.RQueue;
 
-public class RedissonDelayedQueueTest extends BaseTest {
+import java.util.Arrays;
+import java.util.concurrent.TimeUnit;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+public class RedissonDelayedQueueTest extends RedisDockerTest {
 
     @Test
     public void testRemove() throws InterruptedException {
@@ -197,9 +197,33 @@ public class RedissonDelayedQueueTest extends BaseTest {
         
         dealyedQueue.destroy();
     }
+
+    @Test
+    public void testPollLimited() throws InterruptedException {
+        RBlockingQueue<String> queue = redisson.getBlockingQueue("test");
+        RDelayedQueue<String> dealyedQueue = redisson.getDelayedQueue(queue);
+
+        dealyedQueue.offer("1", 1, TimeUnit.SECONDS);
+        dealyedQueue.offer("2", 2, TimeUnit.SECONDS);
+        dealyedQueue.offer("3", 3, TimeUnit.SECONDS);
+        dealyedQueue.offer("4", 4, TimeUnit.SECONDS);
+
+        assertThat(dealyedQueue.poll(3)).containsExactly("1", "2", "3");
+        assertThat(dealyedQueue.poll(2)).containsExactly("4");
+        assertThat(dealyedQueue.poll(2)).isEmpty();
+
+        Thread.sleep(3000);
+        assertThat(queue.isEmpty()).isTrue();
+
+        assertThat(queue.poll()).isNull();
+        assertThat(queue.poll()).isNull();
+
+        dealyedQueue.destroy();
+    }
+
     
     @Test
-    public void testDealyedQueuePoll() throws InterruptedException {
+    public void testPoll() throws InterruptedException {
         RBlockingQueue<String> queue = redisson.getBlockingQueue("test");
         RDelayedQueue<String> dealyedQueue = redisson.getDelayedQueue(queue);
         

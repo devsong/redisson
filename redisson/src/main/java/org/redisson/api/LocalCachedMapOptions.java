@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,23 +15,27 @@
  */
 package org.redisson.api;
 
+import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 
 import org.redisson.api.map.MapLoader;
+import org.redisson.api.map.MapLoaderAsync;
 import org.redisson.api.map.MapWriter;
+ import org.redisson.api.map.MapWriterAsync;
 
 /**
- * RLocalCachedMap options object. Used to specify RLocalCachedMap settings.
+ * Use org.redisson.api.options.LocalCachedMapOptions instead
  * 
  * @author Nikita Koksharov
  *
  * @param <K> key type
  * @param <V> value type
  */
+@Deprecated
 public class LocalCachedMapOptions<K, V> extends MapOptions<K, V> {
     
     /**
-     * Various strategies to avoid stale objects in cache.
+     * Various strategies to avoid stale objects in local cache.
      * Handle cases when map instance has been disconnected for a while.
      *
      */
@@ -43,7 +47,7 @@ public class LocalCachedMapOptions<K, V> extends MapOptions<K, V> {
         NONE,
         
         /**
-         * Clear local cache if map instance has been disconnected for a while.
+         * Clear local cache if map instance disconnected.
          */
         CLEAR,
         
@@ -51,7 +55,7 @@ public class LocalCachedMapOptions<K, V> extends MapOptions<K, V> {
          * Store invalidated entry hash in invalidation log for 10 minutes.
          * Cache keys for stored invalidated entry hashes will be removed 
          * if LocalCachedMap instance has been disconnected less than 10 minutes 
-         * or whole cache will be cleaned otherwise.
+         * or whole local cache will be cleaned otherwise.
          */
         LOAD
         
@@ -65,70 +69,99 @@ public class LocalCachedMapOptions<K, V> extends MapOptions<K, V> {
         NONE,
         
         /**
-         * Invalidate cache entry across all LocalCachedMap instances on map entry change. Broadcasts map entry hash (16 bytes) to all instances.
+         * Invalidate local cache entry across all LocalCachedMap instances on map entry change. Broadcasts map entry hash (16 bytes) to all instances.
          */
         INVALIDATE,
         
         /**
-         * Update cache entry across all LocalCachedMap instances on map entry change. Broadcasts full map entry state (Key and Value objects) to all instances.
+         * Update local cache entry across all LocalCachedMap instances on map entry change. Broadcasts full map entry state (Key and Value objects) to all instances.
          */
         UPDATE
         
     }
     
-    /**
-     * Use {@link #syncStrategy(SyncStrategy)} and/or {@link #reconnectionStrategy(ReconnectionStrategy)} instead
-     * 
-     */
-    @Deprecated
-    public enum InvalidationPolicy {
-        
-        NONE, 
-
-        ON_CHANGE, 
-        
-        ON_CHANGE_WITH_CLEAR_ON_RECONNECT, 
-
-        ON_CHANGE_WITH_LOAD_ON_RECONNECT
-    }
-    
     public enum EvictionPolicy {
         
         /**
-         * Cache without eviction. 
+         * Local cache without eviction. 
          */
         NONE, 
         
         /**
-         * Least Recently Used cache.
+         * Least Recently Used local cache eviction policy.
          */
         LRU, 
         
         /**
-         * Least Frequently Used cache.
+         * Least Frequently Used local cache eviction policy.
          */
         LFU, 
         
         /**
-         * Cache with Soft Reference used for values.
+         * Local cache  eviction policy with Soft Reference used for values.
          * All references will be collected by GC
          */
         SOFT, 
 
         /**
-         * Cache with Weak Reference used for values. 
+         * Local cache eviction policy with Weak Reference used for values.
          * All references will be collected by GC
          */
         WEAK
     };
-    
+
+    public enum CacheProvider {
+
+        REDISSON,
+
+        CAFFEINE
+
+    }
+
+    public enum StoreMode {
+
+        /**
+         * Store data only in local cache.
+         */
+        LOCALCACHE,
+
+        /**
+         * Store data only in both Redis and local cache.
+         */
+        LOCALCACHE_REDIS
+
+    }
+
+    public enum ExpirationEventPolicy {
+
+        /**
+         * Don't subscribe on expire event.
+         */
+        DONT_SUBSCRIBE,
+
+        /**
+         * Subscribe on expire event using __keyevent@*:expired pattern
+         */
+        SUBSCRIBE_WITH_KEYEVENT_PATTERN,
+
+        /**
+         * Subscribe on expire event using __keyspace@N__:name channel
+         */
+        SUBSCRIBE_WITH_KEYSPACE_CHANNEL
+
+    }
+
     private ReconnectionStrategy reconnectionStrategy;
     private SyncStrategy syncStrategy;
     private EvictionPolicy evictionPolicy;
     private int cacheSize;
     private long timeToLiveInMillis;
     private long maxIdleInMillis;
-    
+    private CacheProvider cacheProvider;
+    private StoreMode storeMode;
+    private boolean storeCacheMiss;
+    private ExpirationEventPolicy expirationEventPolicy;
+
     protected LocalCachedMapOptions() {
     }
     
@@ -139,6 +172,9 @@ public class LocalCachedMapOptions<K, V> extends MapOptions<K, V> {
         this.cacheSize = copy.cacheSize;
         this.timeToLiveInMillis = copy.timeToLiveInMillis;
         this.maxIdleInMillis = copy.maxIdleInMillis;
+        this.cacheProvider = copy.cacheProvider;
+        this.storeMode = copy.storeMode;
+        this.storeCacheMiss = copy.storeCacheMiss;
     }
     
     /**
@@ -149,7 +185,10 @@ public class LocalCachedMapOptions<K, V> extends MapOptions<K, V> {
      *     new LocalCachedMapOptions()
      *      .cacheSize(0).timeToLive(0).maxIdle(0)
      *      .evictionPolicy(EvictionPolicy.NONE)
-     *      .invalidateEntryOnChange(true);
+     *      .reconnectionStrategy(ReconnectionStrategy.NONE)
+     *      .cacheProvider(CacheProvider.REDISSON)
+     *      .syncStrategy(SyncStrategy.INVALIDATE)
+     *      .storeCacheMiss(false);
      * </pre>
      * 
      * @param <K> key type
@@ -163,9 +202,17 @@ public class LocalCachedMapOptions<K, V> extends MapOptions<K, V> {
                     .cacheSize(0).timeToLive(0).maxIdle(0)
                     .evictionPolicy(EvictionPolicy.NONE)
                     .reconnectionStrategy(ReconnectionStrategy.NONE)
-                    .syncStrategy(SyncStrategy.INVALIDATE);
+                    .cacheProvider(CacheProvider.REDISSON)
+                    .storeMode(StoreMode.LOCALCACHE_REDIS)
+                    .syncStrategy(SyncStrategy.INVALIDATE)
+                    .storeCacheMiss(false)
+                    .expirationEventPolicy(ExpirationEventPolicy.SUBSCRIBE_WITH_KEYEVENT_PATTERN);
     }
-    
+
+    public CacheProvider getCacheProvider() {
+        return cacheProvider;
+    }
+
     public EvictionPolicy getEvictionPolicy() {
         return evictionPolicy;
     }
@@ -183,9 +230,13 @@ public class LocalCachedMapOptions<K, V> extends MapOptions<K, V> {
     }
 
     /**
-     * Sets cache size. If size is <code>0</code> then local cache is unbounded.
+     * Defines local cache size.
+     * <p>
+     * If size is <code>0</code> then local cache is unbounded.
+     * <p>
+     * If size is <code>-1</code> then local cache is always empty and doesn't store data.
      * 
-     * @param cacheSize - size of cache
+     * @param cacheSize size of cache
      * @return LocalCachedMapOptions instance
      */
     public LocalCachedMapOptions<K, V> cacheSize(int cacheSize) {
@@ -200,7 +251,16 @@ public class LocalCachedMapOptions<K, V> extends MapOptions<K, V> {
     public SyncStrategy getSyncStrategy() {
         return syncStrategy;
     }
-    
+
+    /**
+     * Defines strategy for load missed local cache updates after Redis connection failure.
+     *
+     * @param reconnectionStrategy
+     *          <p><code>CLEAR</code> - clear local cache if map instance has been disconnected for a while.
+     *          <p><code>LOAD</code> - store invalidated entry hash in invalidation log for 10 minutes. Cache keys for stored invalidated entry hashes will be removed if LocalCachedMap instance has been disconnected less than 10 minutes or whole cache will be cleaned otherwise
+     *          <p><code>NONE</code> - Default. No reconnection handling
+     * @return LocalCachedMapOptions instance
+     */
     public LocalCachedMapOptions<K, V> reconnectionStrategy(ReconnectionStrategy reconnectionStrategy) {
         if (reconnectionStrategy == null) {
             throw new NullPointerException("reconnectionStrategy can't be null");
@@ -210,6 +270,15 @@ public class LocalCachedMapOptions<K, V> extends MapOptions<K, V> {
         return this;
     }
 
+    /**
+     * Defines local cache synchronization strategy.
+     *
+     * @param syncStrategy
+     *          <p><code>INVALIDATE</code> - Default. Invalidate cache entry across all LocalCachedMap instances on map entry change
+     *          <p><code>UPDATE</code> - Insert/update cache entry across all LocalCachedMap instances on map entry change
+     *          <p><code>NONE</code> - No synchronizations on map changes
+     * @return LocalCachedMapOptions instance
+     */
     public LocalCachedMapOptions<K, V> syncStrategy(SyncStrategy syncStrategy) {
         if (syncStrategy == null) {
             throw new NullPointerException("syncStrategy can't be null");
@@ -219,48 +288,14 @@ public class LocalCachedMapOptions<K, V> extends MapOptions<K, V> {
         return this;
     }
     
-    /*
-     * Use {@link #syncStrategy(SyncStrategy)} and/or {@link #reconnectionStrategy(ReconnectionStrategy)} instead
-     * 
-     */
-    @Deprecated
-    public LocalCachedMapOptions<K, V> invalidationPolicy(InvalidationPolicy invalidationPolicy) {
-        if (invalidationPolicy == InvalidationPolicy.NONE) {
-            this.syncStrategy = SyncStrategy.NONE;
-        }
-        if (invalidationPolicy == InvalidationPolicy.ON_CHANGE) {
-            this.syncStrategy = SyncStrategy.INVALIDATE;
-        }
-        if (invalidationPolicy == InvalidationPolicy.ON_CHANGE_WITH_CLEAR_ON_RECONNECT) {
-            this.syncStrategy = SyncStrategy.INVALIDATE;
-            this.reconnectionStrategy = ReconnectionStrategy.CLEAR;
-        }
-        if (invalidationPolicy == InvalidationPolicy.ON_CHANGE_WITH_LOAD_ON_RECONNECT) {
-            this.syncStrategy = SyncStrategy.INVALIDATE;
-            this.reconnectionStrategy = ReconnectionStrategy.LOAD;
-        }
-        return this;
-    }
-
-    /*
-     * Use {@link #syncStrategy(SyncStrategy)} and/or {@link #reconnectionStrategy(ReconnectionStrategy)} instead
-     * 
-     */
-    @Deprecated
-    public LocalCachedMapOptions<K, V> invalidateEntryOnChange(boolean value) {
-        if (value) {
-            return invalidationPolicy(InvalidationPolicy.ON_CHANGE);
-        }
-        return invalidationPolicy(InvalidationPolicy.NONE);
-    }
-
     /**
-     * Sets eviction policy. 
+     * Defines local cache eviction policy.
      * 
      * @param evictionPolicy
-     *         <p><code>LRU</code> - uses cache with LRU (least recently used) eviction policy.
-     *         <p><code>LFU</code> - uses cache with LFU (least frequently used) eviction policy.
-     *         <p><code>SOFT</code> - uses cache with soft references. The garbage collector will evict items from the cache when the JVM is running out of memory.
+     *         <p><code>LRU</code> - uses local cache with LRU (least recently used) eviction policy.
+     *         <p><code>LFU</code> - uses local cache with LFU (least frequently used) eviction policy.
+     *         <p><code>SOFT</code> - uses local cache with soft references. The garbage collector will evict items from the local cache when the JVM is running out of memory.
+     *         <p><code>WEAK</code> - uses local cache with weak references. The garbage collector will evict items from the local cache when it became weakly reachable.
      *         <p><code>NONE</code> - doesn't use eviction policy, but timeToLive and maxIdleTime params are still working.
      * @return LocalCachedMapOptions instance
      */
@@ -273,7 +308,7 @@ public class LocalCachedMapOptions<K, V> extends MapOptions<K, V> {
     }
     
     /**
-     * Sets time to live in milliseconds for each map entry in cache.
+     * Defines time to live in milliseconds of each map entry in local cache.
      * If value equals to <code>0</code> then timeout is not applied
      * 
      * @param timeToLiveInMillis - time to live in milliseconds
@@ -285,7 +320,7 @@ public class LocalCachedMapOptions<K, V> extends MapOptions<K, V> {
     }
 
     /**
-     * Sets time to live for each map entry in cache.
+     * Defines time to live of each map entry in local cache.
      * If value equals to <code>0</code> then timeout is not applied
      * 
      * @param timeToLive - time to live
@@ -297,7 +332,7 @@ public class LocalCachedMapOptions<K, V> extends MapOptions<K, V> {
     }
 
     /**
-     * Sets max idle time in milliseconds for each map entry in cache.
+     * Defines max idle time in milliseconds of each map entry in local cache.
      * If value equals to <code>0</code> then timeout is not applied
      * 
      * @param maxIdleInMillis - time to live in milliseconds
@@ -309,7 +344,7 @@ public class LocalCachedMapOptions<K, V> extends MapOptions<K, V> {
     }
 
     /**
-     * Sets max idle time for each map entry in cache.
+     * Defines max idle time of each map entry in local cache.
      * If value equals to <code>0</code> then timeout is not applied
      * 
      * @param maxIdle - max idle time
@@ -319,17 +354,103 @@ public class LocalCachedMapOptions<K, V> extends MapOptions<K, V> {
     public LocalCachedMapOptions<K, V> maxIdle(long maxIdle, TimeUnit timeUnit) {
         return maxIdle(timeUnit.toMillis(maxIdle));
     }
+
+    public StoreMode getStoreMode() {
+        return storeMode;
+    }
+
+    /**
+     * Defines store mode of cache data.
+     *
+     * @param storeMode
+     *         <p><code>LOCALCACHE</code> - store data in local cache only.
+     *         <p><code>LOCALCACHE_REDIS</code> - store data in both Redis and local cache.
+     * @return LocalCachedMapOptions instance
+     */
+    public LocalCachedMapOptions<K, V> storeMode(StoreMode storeMode) {
+        this.storeMode = storeMode;
+        return this;
+    }
+
+    /**
+     * Defines Cache provider used as local cache store.
+     *
+     * @param cacheProvider
+     *         <p><code>REDISSON</code> - uses Redisson own implementation.
+     *         <p><code>CAFFEINE</code> - uses Caffeine implementation.
+     * @return LocalCachedMapOptions instance
+     */
+    public LocalCachedMapOptions<K, V> cacheProvider(CacheProvider cacheProvider) {
+        this.cacheProvider = cacheProvider;
+        return this;
+    }
+
+    public boolean isStoreCacheMiss() {
+        return this.storeCacheMiss;
+    }
+
+    /**
+     * Defines whether to store a cache miss into the local cache.
+     *
+     * @param storeCacheMiss - whether to store a cache miss into the local cache
+     * @return LocalCachedMapOptions instance
+     */
+    public LocalCachedMapOptions<K, V> storeCacheMiss(boolean storeCacheMiss) {
+        this.storeCacheMiss = storeCacheMiss;
+        return this;
+    }
+
+    /**
+     * Use {@link #expirationEventPolicy(ExpirationEventPolicy)} instead
+     *
+     * @param useKeyEventsPattern - whether to use __keyevent pattern topic
+     * @return LocalCachedMapOptions instance
+     */
+    @Deprecated
+    public LocalCachedMapOptions<K, V> useKeyEventsPattern(boolean useKeyEventsPattern) {
+        if (useKeyEventsPattern) {
+            this.expirationEventPolicy = ExpirationEventPolicy.SUBSCRIBE_WITH_KEYEVENT_PATTERN;
+        } else {
+            this.expirationEventPolicy = ExpirationEventPolicy.SUBSCRIBE_WITH_KEYSPACE_CHANNEL;
+        }
+        return this;
+    }
+
+    /**
+     * Defines how to listen expired event sent by Redis upon this instance deletion.
+     *
+     * @param expirationEventPolicy expiration policy value
+     * @return LocalCachedMapOptions instance
+     */
+    public LocalCachedMapOptions<K, V> expirationEventPolicy(ExpirationEventPolicy expirationEventPolicy) {
+        this.expirationEventPolicy = expirationEventPolicy;
+        return this;
+    }
+
+    public ExpirationEventPolicy getExpirationEventPolicy() {
+        return expirationEventPolicy;
+    }
+
+    @Override
+    public LocalCachedMapOptions<K, V> writeBehindBatchSize(int writeBehindBatchSize) {
+        return (LocalCachedMapOptions<K, V>) super.writeBehindBatchSize(writeBehindBatchSize);
+    }
+    
+    @Override
+    public LocalCachedMapOptions<K, V> writeBehindDelay(int writeBehindDelay) {
+        return (LocalCachedMapOptions<K, V>) super.writeBehindDelay(writeBehindDelay);
+    }
     
     @Override
     public LocalCachedMapOptions<K, V> writer(MapWriter<K, V> writer) {
         return (LocalCachedMapOptions<K, V>) super.writer(writer);
     }
-    
+
     @Override
-    public LocalCachedMapOptions<K, V> writeBehindThreads(int writeBehindThreads) {
-        return (LocalCachedMapOptions<K, V>) super.writeBehindThreads(writeBehindThreads);
+    public LocalCachedMapOptions<K, V> writerAsync(MapWriterAsync<K, V> writer) {
+        return (LocalCachedMapOptions<K, V>) super.writerAsync(writer);
     }
-    
+
     @Override
     public LocalCachedMapOptions<K, V> writeMode(org.redisson.api.MapOptions.WriteMode writeMode) {
         return (LocalCachedMapOptions<K, V>) super.writeMode(writeMode);
@@ -340,4 +461,18 @@ public class LocalCachedMapOptions<K, V> extends MapOptions<K, V> {
         return (LocalCachedMapOptions<K, V>) super.loader(loader);
     }
 
+    @Override
+    public LocalCachedMapOptions<K, V> loaderAsync(MapLoaderAsync<K, V> loaderAsync) {
+        return (LocalCachedMapOptions<K, V>) super.loaderAsync(loaderAsync);
+    }
+
+    @Override
+    public LocalCachedMapOptions<K, V> writerRetryAttempts(int writerRetryAttempts) {
+        return (LocalCachedMapOptions<K, V>) super.writerRetryAttempts(writerRetryAttempts);
+    }
+
+    @Override
+    public LocalCachedMapOptions<K, V> writerRetryInterval(Duration writerRetryInterval) {
+        return (LocalCachedMapOptions<K, V>) super.writerRetryInterval(writerRetryInterval);
+    }
 }

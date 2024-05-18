@@ -1,14 +1,97 @@
 package org.redisson;
 
-import java.util.Iterator;
-
-import static org.assertj.core.api.Assertions.*;
-import org.junit.Assert;
-import org.junit.Test;
+import org.awaitility.Awaitility;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+import org.reactivestreams.Subscriber;
+import org.reactivestreams.Subscription;
 import org.redisson.api.RBucketReactive;
+import org.redisson.api.RKeysReactive;
 import org.redisson.api.RMapReactive;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+
+import java.time.Duration;
+import java.util.Iterator;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 public class RedissonKeysReactiveTest extends BaseReactiveTest {
+
+    @Test
+    public void testKeysByPatternIterator() {
+        for (int i = 0; i < 100; i++) {
+            redisson.getBucket("key" + i).set(1).block();
+        }
+
+        Flux<String> p = redisson.getKeys().getKeysByPattern(null);
+        AtomicInteger i = new AtomicInteger();
+        p.doOnNext(t -> {
+            i.incrementAndGet();
+        }).doOnSubscribe(s -> {
+            s.request(100);
+        }).subscribe();
+
+        Awaitility.await().atMost(Duration.ofSeconds(1)).untilAsserted(() -> {
+            assertThat(i.get()).isEqualTo(100);
+        });
+    }
+
+    @Test
+    public void testKeysByPatternIteratorWithSlowConsumer() throws InterruptedException {
+        int noOfKeys = 1200;
+        for (int i = 0; i < noOfKeys; i++) {
+            redisson.getBucket("key" + i).set(1).block();
+        }
+
+        Flux<String> p = redisson.getKeys().getKeysByPattern(null)
+                .flatMap(string -> Mono.just(string)
+                        .delayElement(Duration.ofMillis(10)));
+        AtomicInteger i = new AtomicInteger();
+        p.doOnNext(t -> {
+            i.incrementAndGet();
+        }).blockLast();
+        assertThat(i.get()).isEqualTo(noOfKeys);
+        i.set(0);
+
+        Flux<String> pp = redisson.getKeys().getKeysByPattern(null);
+
+        pp.doOnNext(t -> {
+            i.incrementAndGet();
+        }).subscribeWith(new Subscriber() {
+
+            @Override
+            public void onSubscribe(Subscription s) {
+                s.request(10);
+            }
+
+            @Override
+            public void onNext(Object o) {
+
+            }
+
+            @Override
+            public void onError(Throwable t) {
+
+            }
+
+            @Override
+            public void onComplete() {
+            }
+        });
+        Thread.sleep(100);
+        assertThat(i.get()).isEqualTo(10);
+    }
+
+    @Test
+    public void testGetKeys() {
+        RKeysReactive keys = redisson.getKeys();
+        sync(redisson.getBucket("test1").set(1));
+        sync(redisson.getBucket("test2").set(1));
+        Flux<String> k = keys.getKeys();
+        assertThat(k.toIterable()).contains("test1", "test2");
+    }
 
     @Test
     public void testKeysIterablePattern() {
@@ -18,10 +101,13 @@ public class RedissonKeysReactiveTest extends BaseReactiveTest {
         sync(redisson.getBucket("test12").set("someValue"));
 
         Iterator<String> iterator = toIterator(redisson.getKeys().getKeysByPattern("test?"));
+        int size = 0;
         for (; iterator.hasNext();) {
             String key = iterator.next();
             assertThat(key).isIn("test1", "test2");
+            size += 1;
         }
+        assertThat(size).isEqualTo(2);
     }
 
     @Test
@@ -34,9 +120,9 @@ public class RedissonKeysReactiveTest extends BaseReactiveTest {
 
         assertThat(sync(redisson.getKeys().randomKey())).isIn("test1", "test2");
         sync(redisson.getKeys().delete("test1"));
-        Assert.assertEquals("test2", sync(redisson.getKeys().randomKey()));
+        Assertions.assertEquals("test2", sync(redisson.getKeys().randomKey()));
         sync(redisson.getKeys().flushdb());
-        Assert.assertNull(sync(redisson.getKeys().randomKey()));
+        Assertions.assertNull(sync(redisson.getKeys().randomKey()));
     }
 
     @Test
@@ -46,7 +132,7 @@ public class RedissonKeysReactiveTest extends BaseReactiveTest {
         RMapReactive<String, String> map = redisson.getMap("test2");
         sync(map.fastPut("1", "2"));
 
-        Assert.assertEquals(2, sync(redisson.getKeys().deleteByPattern("test?")).intValue());
+        Assertions.assertEquals(2, sync(redisson.getKeys().deleteByPattern("test?")).intValue());
     }
 
     @Test
@@ -56,8 +142,8 @@ public class RedissonKeysReactiveTest extends BaseReactiveTest {
         RMapReactive<String, String> map = redisson.getMap("map2");
         sync(map.fastPut("1", "2"));
 
-        Assert.assertEquals(2, sync(redisson.getKeys().delete("test", "map2")).intValue());
-        Assert.assertEquals(0, sync(redisson.getKeys().delete("test", "map2")).intValue());
+        Assertions.assertEquals(2, sync(redisson.getKeys().delete("test", "map2")).intValue());
+        Assertions.assertEquals(0, sync(redisson.getKeys().delete("test", "map2")).intValue());
     }
 
 }

@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,18 +15,10 @@
  */
 package org.redisson.executor;
 
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.Callable;
-import java.util.concurrent.CompletionService;
-import java.util.concurrent.Executor;
-import java.util.concurrent.Future;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 
 import org.redisson.api.RFuture;
 import org.redisson.api.RScheduledExecutorService;
-
-import io.netty.util.concurrent.FutureListener;
 
 /**
  * A {@link CompletionService} that uses a supplied {@link Executor}
@@ -68,12 +60,9 @@ public class RedissonCompletionService<V> implements CompletionService<V> {
             throw new NullPointerException("taks can't be null");
         }
         
-        final RFuture<V> f = executorService.submit(task);
-        f.addListener(new FutureListener<V>() {
-            @Override
-            public void operationComplete(io.netty.util.concurrent.Future<V> future) throws Exception {
-                completionQueue.add(f);
-            }
+        RFuture<V> f = executorService.submit(task);
+        f.whenComplete((res, e) -> {
+            completionQueue.add(f);
         });
         return f;
     }
@@ -84,12 +73,9 @@ public class RedissonCompletionService<V> implements CompletionService<V> {
             throw new NullPointerException("taks can't be null");
         }
         
-        final RFuture<V> f = executorService.submit(task, result);
-        f.addListener(new FutureListener<V>() {
-            @Override
-            public void operationComplete(io.netty.util.concurrent.Future<V> future) throws Exception {
-                completionQueue.add(f);
-            }
+        RFuture<V> f = executorService.submit(task, result);
+        f.whenComplete((res, e) -> {
+            completionQueue.add(f);
         });
         return f;
     }

@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,22 +15,12 @@
  */
 package org.redisson.reactive;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Set;
-import java.util.UUID;
-import java.util.concurrent.TimeUnit;
-
-import org.reactivestreams.Publisher;
 import org.redisson.RedissonSetMultimap;
-import org.redisson.api.RSetMultimapReactive;
+import org.redisson.api.RSet;
+import org.redisson.api.RSetMultimap;
 import org.redisson.api.RSetReactive;
+import org.redisson.api.RedissonReactiveClient;
 import org.redisson.client.codec.Codec;
-import org.redisson.client.protocol.RedisCommands;
-import org.redisson.command.CommandReactiveExecutor;
-
-import io.netty.buffer.ByteBuf;
 
 /**
  * 
@@ -39,106 +29,28 @@ import io.netty.buffer.ByteBuf;
  * @param <K> key type
  * @param <V> value type
  */
-public class RedissonSetMultimapReactive<K, V> extends RedissonBaseMultimapReactive<K, V> implements RSetMultimapReactive<K, V> {
+public class RedissonSetMultimapReactive<K, V> {
 
-    public RedissonSetMultimapReactive(UUID id, CommandReactiveExecutor commandExecutor, String name) {
-        super(new RedissonSetMultimap<K, V>(commandExecutor, name), commandExecutor, name);
+    private final RedissonReactiveClient redisson;
+    private final CommandReactiveExecutor commandExecutor;
+    private final RedissonSetMultimap<K, V> instance;
+    
+    public RedissonSetMultimapReactive(CommandReactiveExecutor commandExecutor, String name, RedissonReactiveClient redisson) {
+        this.instance = new RedissonSetMultimap<>(commandExecutor, name);
+        this.redisson = redisson;
+        this.commandExecutor = commandExecutor;
     }
 
-    public RedissonSetMultimapReactive(UUID id, Codec codec, CommandReactiveExecutor commandExecutor, String name) {
-        super(new RedissonSetMultimap<K, V>(codec, commandExecutor, name), codec, commandExecutor, name);
+    public RedissonSetMultimapReactive(Codec codec, CommandReactiveExecutor commandExecutor, String name, RedissonReactiveClient redisson) {
+        this.instance = new RedissonSetMultimap<>(codec, commandExecutor, name);
+        this.redisson = redisson;
+        this.commandExecutor = commandExecutor;
     }
 
-    @Override
-    public RSetReactive<V> get(final K key) {
-        final ByteBuf keyState = encodeMapKey(key);
-        final String keyHash = hashAndRelease(keyState);
-        final String setName = getValuesName(keyHash);
-
-        return new RedissonSetReactive<V>(codec, commandExecutor, setName) {
-            
-            @Override
-            public Publisher<Boolean> delete() {
-                ByteBuf keyState = encodeMapKey(key);
-                return RedissonSetMultimapReactive.this.fastRemove(Arrays.<Object>asList(keyState), Arrays.<Object>asList(setName), RedisCommands.EVAL_BOOLEAN_AMOUNT);
-            }
-            
-            @Override
-            public Publisher<Boolean> clearExpire() {
-                throw new UnsupportedOperationException("This operation is not supported for SetMultimap values Set");
-            }
-            
-            @Override
-            public Publisher<Boolean> expire(long timeToLive, TimeUnit timeUnit) {
-                throw new UnsupportedOperationException("This operation is not supported for SetMultimap values Set");
-            }
-            
-            @Override
-            public Publisher<Boolean> expireAt(long timestamp) {
-                throw new UnsupportedOperationException("This operation is not supported for SetMultimap values Set");
-            }
-            
-            @Override
-            public Publisher<Long> remainTimeToLive() {
-                throw new UnsupportedOperationException("This operation is not supported for SetMultimap values Set");
-            }
-            
-            @Override
-            public Publisher<Void> rename(String newName) {
-                throw new UnsupportedOperationException("This operation is not supported for SetMultimap values Set");
-            }
-            
-            @Override
-            public Publisher<Boolean> renamenx(String newName) {
-                throw new UnsupportedOperationException("This operation is not supported for SetMultimap values Set");
-            }
-            
-        };
-    }
-
-    @Override
-    public Publisher<Set<V>> getAll(K key) {
-        ByteBuf keyState = encodeMapKey(key);
-        String keyHash = hashAndRelease(keyState);
-        String setName = getValuesName(keyHash);
-
-        return commandExecutor.readReactive(getName(), codec, RedisCommands.SMEMBERS, setName);
-    }
-
-    @Override
-    public Publisher<Set<V>> removeAll(Object key) {
-        ByteBuf keyState = encodeMapKey(key);
-        String keyHash = hash(keyState);
-
-        String setName = getValuesName(keyHash);
-        return commandExecutor.evalWriteReactive(getName(), codec, RedisCommands.EVAL_SET,
-                "redis.call('hdel', KEYS[1], ARGV[1]); " +
-                "local members = redis.call('smembers', KEYS[2]); " +
-                "redis.call('del', KEYS[2]); " +
-                "return members; ",
-            Arrays.<Object>asList(getName(), setName), keyState);
-    }
-
-    @Override
-    public Publisher<Set<V>> replaceValues(K key, Iterable<? extends V> values) {
-        List<Object> params = new ArrayList<Object>();
-        ByteBuf keyState = encodeMapKey(key);
-        params.add(keyState);
-        String keyHash = hash(keyState);
-        params.add(keyHash);
-        for (Object value : values) {
-            ByteBuf valueState = encodeMapValue(value);
-            params.add(valueState);
-        }
-
-        String setName = getValuesName(keyHash);
-        return commandExecutor.evalWriteReactive(getName(), codec, RedisCommands.EVAL_SET,
-                "redis.call('hset', KEYS[1], ARGV[1], ARGV[2]); " +
-                "local members = redis.call('smembers', KEYS[2]); " +
-                "redis.call('del', KEYS[2]); " +
-                "redis.call('sadd', KEYS[2], unpack(ARGV, 3, #ARGV)); " +
-                "return members; ",
-            Arrays.<Object>asList(getName(), setName), params.toArray());
+    public RSetReactive<V> get(K key) {
+        RSet<V> set = ((RSetMultimap<K, V>) instance).get(key);
+        return ReactiveProxyBuilder.create(commandExecutor, set, 
+                new RedissonSetReactive<V>(set, redisson), RSetReactive.class);
     }
 
 }

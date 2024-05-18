@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,12 @@
  */
 package org.redisson.api;
 
+import java.util.Collection;
+import java.util.List;
+
+import org.redisson.api.condition.Condition;
+import org.redisson.api.condition.Conditions;
+
 /**
  * The pre-registration of each entity class is not necessary.
  *
@@ -22,6 +28,7 @@ package org.redisson.api;
  * automatically.
  *
  * @author Rui Gu (https://github.com/jackygurui)
+ * @author Nikita Koksharov
  *
  */
 public interface RLiveObjectService {
@@ -39,13 +46,76 @@ public interface RLiveObjectService {
      * </ol>
      *
      *
-     * @param entityClass Entity class
+     * @param entityClass - entity class
      * @param id identifier
      * @param <T> Entity type
-     * @param <K> Key type
      * @return a proxied object if it exists in redis, or null if not.
      */
-    <T, K> T get(Class<T> entityClass, K id);
+    <T> T get(Class<T> entityClass, Object id);
+    
+    /**
+     * Finds the entities matches specified <code>condition</code>.
+     * <p><strong>
+     * NOTE: open-source version is slow.<br>
+     * Use <a href="https://redisson.pro">Redisson PRO</a> instead.
+     * </strong><p>
+     * Usage example:
+     * <pre>
+     * Collection objects = liveObjectService.find(MyObject.class, Conditions.or(Conditions.in("field", "value1", "value2"), 
+     *                          Conditions.and(Conditions.eq("field2", "value2"), Conditions.eq("field3", "value5"))));
+     * </pre>
+     * 
+     * @see Conditions
+     * 
+     * @param <T> Entity type
+     * @param entityClass - entity class
+     * @param condition - condition object 
+     * @return collection of live objects or empty collection.
+     */
+    <T> Collection<T> find(Class<T> entityClass, Condition condition);
+
+    /**
+     * Counts the entities matches specified <code>condition</code>.
+     * <p><strong>
+     * NOTE: open-source version is slow.<br>
+     * Use <a href="https://redisson.pro">Redisson PRO</a> instead.
+     * </strong><p>
+     * Usage example:
+     * <pre>
+     * long objectsAmount = liveObjectService.count(MyObject.class, Conditions.or(Conditions.in("field", "value1", "value2"),
+     *                          Conditions.and(Conditions.eq("field2", "value2"), Conditions.eq("field3", "value5"))));
+     * </pre>
+     *
+     * @see Conditions
+     *
+     * @param entityClass - entity class
+     * @param condition - condition object
+     * @return amount of live objects.
+     */
+    long count(Class<?> entityClass, Condition condition);
+
+    /**
+     * Returns iterator for all entry ids by specified <code>entityClass</code>.
+     * Ids traversed with SCAN operation. Each SCAN operation loads
+     * up to <code>count</code> keys per request.
+     *
+     * @param entityClass - entity class
+     * @param <K> Key type
+     * @return collection of ids or empty collection.
+     */
+    <K> Iterable<K> findIds(Class<?> entityClass);
+
+    /**
+     * Returns iterator for all entry ids by specified <code>entityClass</code>.
+     * Ids traversed with SCAN operation. Each SCAN operation loads
+     * up to <code>count</code> keys per request.
+     *
+     * @param entityClass - entity class
+     * @param count - keys loaded per request to Redis
+     * @param <K> Key type
+     * @return collection of ids or empty collection.
+     */
+    <K> Iterable<K> findIds(Class<?> entityClass, int count);
 
     /**
      * Returns proxied object for the detached object. Discard all the
@@ -73,7 +143,7 @@ public interface RLiveObjectService {
      * RId, and the object should hold a non null value in that field.
      * 
      * If this object is not in redis then a new hash key will be created to
-     * store it.
+     * store it. Otherwise overrides current object state in Redis with the given object state.
      *
      * @param <T> Entity type
      * @param detachedObject - not proxied object
@@ -83,18 +153,45 @@ public interface RLiveObjectService {
     <T> T merge(T detachedObject);
 
     /**
+     * Returns proxied object for the detached object. Transfers all the
+     * <b>NON NULL</b> field values to the redis server. It does not delete any
+     * existing data in redis in case of the field value is null.
+     *
+     * The class representing this object should have a field annotated with
+     * RId, and the object should hold a non null value in that field.
+     *
+     * If this object is not in redis then a new hash key will be created to
+     * store it. Otherwise overrides current object state in Redis with the given object state.
+     *
+     * @param <T> Entity type
+     * @param detachedObjects - not proxied objects
+     * @return proxied object
+     * @throws IllegalArgumentException if the object is is a RLiveObject instance.
+     */
+    <T> List<T> merge(T... detachedObjects);
+
+    /**
      * Returns proxied attached object for the detached object. Transfers all the
      * <b>NON NULL</b> field values to the redis server. Only when the it does
      * not already exist.
      * 
-     * If this object is not in redis then a new hash key will be created to
-     * store it.
-     *
      * @param <T> Entity type
      * @param detachedObject - not proxied object
      * @return proxied object
      */
     <T> T persist(T detachedObject);
+
+    /**
+     * Returns proxied attached objects for the detached objects. Stores all the
+     * <b>NON NULL</b> field values.
+     * <p>
+     * Executed in a batch mode.
+     *
+     * @param <T> Entity type
+     * @param detachedObjects - not proxied objects
+     * @return list of proxied objects
+     */
+    <T> List<T> persist(T... detachedObjects);
 
     /**
      * Returns unproxied detached object for the attached object.
@@ -114,15 +211,16 @@ public interface RLiveObjectService {
     <T> void delete(T attachedObject);
 
     /**
-     * Deletes object by class and id including all nested objects.
+     * Deletes object by class and ids including all nested objects.
      *
      * @param <T> Entity type
-     * @param <K> Key type
      * @param entityClass - object class
-     * @param id - object id
+     * @param ids - object ids
+     * 
+     * @return amount of deleted objects
      */
-    <T, K> void delete(Class<T> entityClass, K id);
-
+    <T> long delete(Class<T> entityClass, Object... ids);
+    
     /**
      * To cast the instance to RLiveObject instance.
      * 
@@ -131,15 +229,6 @@ public interface RLiveObjectService {
      * @return RLiveObject compatible object
      */
     <T> RLiveObject asLiveObject(T instance);
-
-    /**
-     * To cast the instance to RExpirable instance.
-     * 
-     * @param <T> type of instance
-     * @param instance - live object
-     * @return RExpirable compatible object
-     */
-    <T> RExpirable asRExpirable(T instance);
 
     /**
      * To cast the instance to RMap instance.

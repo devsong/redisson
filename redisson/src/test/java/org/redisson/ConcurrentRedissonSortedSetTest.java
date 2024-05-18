@@ -1,6 +1,9 @@
 package org.redisson;
 
-import static org.assertj.core.api.Assertions.*;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+import org.redisson.api.RSortedSet;
+
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.util.ArrayList;
@@ -9,10 +12,7 @@ import java.util.List;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import org.junit.Assert;
-import org.junit.Test;
-import org.redisson.api.RSortedSet;
-import org.redisson.api.RedissonClient;
+import static org.assertj.core.api.Assertions.assertThat;
 
 public class ConcurrentRedissonSortedSetTest extends BaseConcurrentTest {
 
@@ -20,12 +20,11 @@ public class ConcurrentRedissonSortedSetTest extends BaseConcurrentTest {
     public void testAdd_SingleInstance() throws InterruptedException {
         final String name = "testAdd_SingleInstance";
 
-        RedissonClient r = BaseTest.createInstance();
-        RSortedSet<Integer> map = r.getSortedSet(name);
+        RSortedSet<Integer> map = redisson.getSortedSet(name);
         map.clear();
 
         int length = 5000;
-        final List<Integer> elements = new ArrayList<Integer>();
+        final List<Integer> elements = new ArrayList<>();
         for (int i = 1; i < length + 1; i++) {
             elements.add(i);
         }
@@ -35,7 +34,7 @@ public class ConcurrentRedissonSortedSetTest extends BaseConcurrentTest {
             RSortedSet<Integer> set = rc.getSortedSet(name);
             int c = counter.incrementAndGet();
             Integer element = elements.get(c);
-            Assert.assertTrue(set.add(element));
+            Assertions.assertTrue(set.add(element));
         });
 
         Collections.sort(elements);
@@ -43,15 +42,13 @@ public class ConcurrentRedissonSortedSetTest extends BaseConcurrentTest {
         assertThat(map).containsExactly(p);
 
         map.clear();
-        r.shutdown();
     }
 
     @Test
     public void testAddRemove_SingleInstance() throws InterruptedException, NoSuchAlgorithmException {
         final String name = "testAddNegative_SingleInstance";
 
-        RedissonClient r = BaseTest.createInstance();
-        RSortedSet<Integer> map = r.getSortedSet(name);
+        RSortedSet<Integer> map = redisson.getSortedSet(name);
         map.clear();
         int length = 1000;
         for (int i = 0; i < length; i++) {
@@ -63,11 +60,11 @@ public class ConcurrentRedissonSortedSetTest extends BaseConcurrentTest {
         testSingleInstanceConcurrency(length, rc -> {
             RSortedSet<Integer> set = rc.getSortedSet(name);
             int c = counter.incrementAndGet();
-            Assert.assertTrue(set.add(c));
+            Assertions.assertTrue(set.add(c));
             set.remove(rnd.nextInt(length));
         });
 
-        Assert.assertEquals(counter.get(), length*2);
+        Assertions.assertEquals(counter.get(), length*2);
         
         Integer prevVal = null;
         for (Integer val : map) {
@@ -76,11 +73,9 @@ public class ConcurrentRedissonSortedSetTest extends BaseConcurrentTest {
                 continue;
             }
             if (val < prevVal) {
-                Assert.fail();
+                Assertions.fail();
             }
         }
-        
-        r.shutdown();
     }
 
 }

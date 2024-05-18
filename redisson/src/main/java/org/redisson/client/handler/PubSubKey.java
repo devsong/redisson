@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,18 +15,27 @@
  */
 package org.redisson.client.handler;
 
+import org.redisson.client.ChannelName;
+
+import java.util.Objects;
+
+/**
+ * 
+ * @author Nikita Koksharov
+ *
+ */
 public class PubSubKey {
 
-    private final String channel;
+    private final ChannelName channel;
     private final String operation;
     
-    public PubSubKey(String channel, String operation) {
+    public PubSubKey(ChannelName channel, String operation) {
         super();
         this.channel = channel;
         this.operation = operation;
     }
     
-    public String getChannel() {
+    public ChannelName getChannel() {
         return channel;
     }
     
@@ -35,34 +44,15 @@ public class PubSubKey {
     }
 
     @Override
-    public int hashCode() {
-        final int prime = 31;
-        int result = 1;
-        result = prime * result + ((channel == null) ? 0 : channel.hashCode());
-        result = prime * result + ((operation == null) ? 0 : operation.hashCode());
-        return result;
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        PubSubKey pubSubKey = (PubSubKey) o;
+        return Objects.equals(channel, pubSubKey.channel) && Objects.equals(operation, pubSubKey.operation);
     }
 
     @Override
-    public boolean equals(Object obj) {
-        if (this == obj)
-            return true;
-        if (obj == null)
-            return false;
-        if (getClass() != obj.getClass())
-            return false;
-        PubSubKey other = (PubSubKey) obj;
-        if (channel == null) {
-            if (other.channel != null)
-                return false;
-        } else if (!channel.equals(other.channel))
-            return false;
-        if (operation == null) {
-            if (other.operation != null)
-                return false;
-        } else if (!operation.equals(other.operation))
-            return false;
-        return true;
+    public int hashCode() {
+        return Objects.hash(channel, operation);
     }
-    
 }

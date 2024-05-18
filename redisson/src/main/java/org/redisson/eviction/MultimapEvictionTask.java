@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -38,24 +38,33 @@ public class MultimapEvictionTask extends EvictionTask {
         this.timeoutSetName = timeoutSetName;
     }
 
+    @Override
+    String getName() {
+        return name;
+    }
+    
     RFuture<Integer> execute() {
         return executor.evalWriteAsync(name, LongCodec.INSTANCE, RedisCommands.EVAL_INTEGER,
                 "local expiredKeys = redis.call('zrangebyscore', KEYS[2], 0, ARGV[1], 'limit', 0, ARGV[2]); "
               + "if #expiredKeys > 0 then "
                   + "redis.call('zrem', KEYS[2], unpack(expiredKeys)); "
-                  
+
                   + "local values = redis.call('hmget', KEYS[1], unpack(expiredKeys)); "
                   + "local keys = {}; "
-                  + "for i, v in ipairs(values) do "
-                      + "local name = '{' .. KEYS[1] .. '}:' .. v; "
-                      + "table.insert(keys, name); "
+                  + "for i, v in ipairs(values) do " +
+                        "if v ~= false then "
+                        + "local name = '{' .. KEYS[1] .. '}:' .. v; "
+                        + "table.insert(keys, name); "
+                      + "end;"
                   + "end; "
-                  + "redis.call('del', unpack(keys)); "
-                  
+                  + "if #keys > 0 then "
+                      + "redis.call('del', unpack(keys)); "
+                  + "end; "
+
                   + "redis.call('hdel', KEYS[1], unpack(expiredKeys)); "
               + "end; "
               + "return #expiredKeys;",
-              Arrays.<Object>asList(name, timeoutSetName), System.currentTimeMillis(), keysLimit);
+              Arrays.asList(name, timeoutSetName), System.currentTimeMillis(), keysLimit);
     }
     
 }

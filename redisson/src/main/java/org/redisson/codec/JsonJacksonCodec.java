@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -49,6 +49,10 @@ import io.netty.buffer.ByteBufInputStream;
 import io.netty.buffer.ByteBufOutputStream;
 
 /**
+ * Json codec based on Jackson implementation.
+ * https://github.com/FasterXML/jackson
+ * <p>
+ * Fully thread-safe.
  *
  * @see org.redisson.codec.CborJacksonCodec
  * @see org.redisson.codec.MsgPackJacksonCodec
@@ -61,7 +65,10 @@ public class JsonJacksonCodec extends BaseCodec {
     public static final JsonJacksonCodec INSTANCE = new JsonJacksonCodec();
 
     @JsonIdentityInfo(generator=ObjectIdGenerators.IntSequenceGenerator.class, property="@id")
-    @JsonAutoDetect(fieldVisibility = Visibility.NONE, getterVisibility = Visibility.PUBLIC_ONLY, setterVisibility = Visibility.PUBLIC_ONLY, isGetterVisibility = Visibility.PUBLIC_ONLY)
+    @JsonAutoDetect(fieldVisibility = Visibility.NON_PRIVATE,
+                    getterVisibility = Visibility.PUBLIC_ONLY, 
+                    setterVisibility = Visibility.NONE, 
+                    isGetterVisibility = Visibility.NONE)
     public static class ThrowableMixIn {
         
     }
@@ -74,11 +81,14 @@ public class JsonJacksonCodec extends BaseCodec {
             ByteBuf out = ByteBufAllocator.DEFAULT.buffer();
             try {
                 ByteBufOutputStream os = new ByteBufOutputStream(out);
-                mapObjectMapper.writeValue((OutputStream)os, in);
+                mapObjectMapper.writeValue((OutputStream) os, in);
                 return os.buffer();
             } catch (IOException e) {
                 out.release();
                 throw e;
+            } catch (Exception e) {
+                out.release();
+                throw new IOException(e);
             }
         }
     };
@@ -86,7 +96,7 @@ public class JsonJacksonCodec extends BaseCodec {
     private final Decoder<Object> decoder = new Decoder<Object>() {
         @Override
         public Object decode(ByteBuf buf, State state) throws IOException {
-            return mapObjectMapper.readValue((InputStream)new ByteBufInputStream(buf), Object.class);
+            return mapObjectMapper.readValue((InputStream) new ByteBufInputStream(buf), Object.class);
         }
     };
     
@@ -97,17 +107,52 @@ public class JsonJacksonCodec extends BaseCodec {
     public JsonJacksonCodec(ClassLoader classLoader) {
         this(createObjectMapper(classLoader, new ObjectMapper()));
     }
-    
+
+    public JsonJacksonCodec(ClassLoader classLoader, JsonJacksonCodec codec) {
+        this(createObjectMapper(classLoader, codec.mapObjectMapper.copy()));
+    }
+
+    private static boolean warmedup = false;
+
+    private void warmup() {
+        if (getValueEncoder() == null || getValueDecoder() == null || warmedup) {
+            return;
+        }
+        warmedup = true;
+
+        ByteBuf d = null;
+        try {
+            d = getValueEncoder().encode("testValue");
+            getValueDecoder().decode(d, null);
+        } catch (IOException e) {
+            e.printStackTrace();
+        } finally {
+            if (d != null) {
+                d.release();
+            }
+        }
+    }
+
     protected static ObjectMapper createObjectMapper(ClassLoader classLoader, ObjectMapper om) {
-        TypeFactory tf = TypeFactory.defaultInstance().withClassLoader(classLoader);
+        TypeFactory tf = om.getTypeFactory().withClassLoader(classLoader);
         om.setTypeFactory(tf);
         return om;
     }
 
     public JsonJacksonCodec(ObjectMapper mapObjectMapper) {
-        this.mapObjectMapper = mapObjectMapper.copy();
+        this(mapObjectMapper, true);
+        warmup();
+    }
+
+    public JsonJacksonCodec(ObjectMapper mapObjectMapper, boolean copy) {
+        if (copy) {
+            this.mapObjectMapper = mapObjectMapper.copy();
+        } else {
+            this.mapObjectMapper = mapObjectMapper;
+        }
         init(this.mapObjectMapper);
         initTypeInclusion(this.mapObjectMapper);
+        warmup();
     }
 
     protected void initTypeInclusion(ObjectMapper mapObjectMapper) {
@@ -120,7 +165,7 @@ public class JsonJacksonCodec extends BaseCodec {
                     }
                     // fall through
                 case OBJECT_AND_NON_CONCRETE:
-                    return (t.getRawClass() == Object.class) || !t.isConcrete();
+                    return t.getRawClass() == Object.class || !t.isConcrete();
                 case NON_FINAL:
                     while (t.isArrayType()) {
                         t = t.getContentType();
@@ -135,26 +180,16 @@ public class JsonJacksonCodec extends BaseCodec {
                     return !t.isFinal(); // includes Object.class
                 default:
                     // case JAVA_LANG_OBJECT:
-                    return (t.getRawClass() == Object.class);
+                    return t.getRawClass() == Object.class;
                 }
             }
         };
         mapTyper.init(JsonTypeInfo.Id.CLASS, null);
         mapTyper.inclusion(JsonTypeInfo.As.PROPERTY);
         mapObjectMapper.setDefaultTyping(mapTyper);
-        
-        // warm up codec
-        try {
-            byte[] s = mapObjectMapper.writeValueAsBytes(1);
-            mapObjectMapper.readValue(s, Object.class);
-        } catch (IOException e) {
-            throw new IllegalStateException(e);
-        }
     }
 
     protected void init(ObjectMapper objectMapper) {
-        objectMapper.registerModule(new DefenceModule());
-        
         objectMapper.setSerializationInclusion(Include.NON_NULL);
         objectMapper.setVisibility(objectMapper.getSerializationConfig()
                                                     .getDefaultVisibilityChecker()

@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,13 +15,9 @@
  */
 package org.redisson.cache;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.Iterator;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Set;
+import org.redisson.misc.WrappedLock;
+
+import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -34,39 +30,73 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public class LRUCacheMap<K, V> extends AbstractCacheMap<K, V> {
 
+    static class SortedSet<V> {
+
+        final Set<V> set = new LinkedHashSet<>();
+
+        final WrappedLock lock = new WrappedLock();
+
+        void add(V element) {
+            lock.execute(() -> {
+                set.add(element);
+            });
+        }
+
+        boolean remove(V element) {
+            return lock.execute(() -> set.remove(element));
+        }
+
+        V removeFirst() {
+            return lock.execute(() -> {
+                Iterator<V> iter = set.iterator();
+                V removedValue = null;
+                if (iter.hasNext()) {
+                    removedValue = iter.next();
+                    iter.remove();
+                }
+                return removedValue;
+            });
+        }
+
+        void clear() {
+            lock.execute(() -> {
+                set.clear();
+            });
+        }
+
+    }
+
     private final AtomicLong index = new AtomicLong();
-    private final List<Collection<CachedValue<K, V>>> queues = 
-            new ArrayList<Collection<CachedValue<K, V>>>(Runtime.getRuntime().availableProcessors()*2);
-    
+    private final List<SortedSet<CachedValue<K, V>>> queues = new ArrayList<>();
+
     public LRUCacheMap(int size, long timeToLiveInMillis, long maxIdleInMillis) {
         super(size, timeToLiveInMillis, maxIdleInMillis);
         
         for (int i = 0; i < Runtime.getRuntime().availableProcessors()*2; i++) {
-            Set<CachedValue<K, V>> instance = Collections.synchronizedSet(new LinkedHashSet<CachedValue<K, V>>());
-            queues.add(instance);
+            queues.add(new SortedSet<>());
         }
     }
 
     @Override
     protected void onValueCreate(CachedValue<K, V> value) {
-        Collection<CachedValue<K, V>> queue = getQueue(value);
+        SortedSet<CachedValue<K, V>> queue = getQueue(value);
         queue.add(value);
     }
 
-    private Collection<CachedValue<K, V>> getQueue(CachedValue<K, V> value) {
-        return queues.get(value.hashCode() % queues.size());
+    private SortedSet<CachedValue<K, V>> getQueue(CachedValue<K, V> value) {
+        return queues.get(Math.abs(value.hashCode() % queues.size()));
     }
     
     @Override
     protected void onValueRemove(CachedValue<K, V> value) {
-        Collection<CachedValue<K, V>> queue = getQueue(value);
+        SortedSet<CachedValue<K, V>> queue = getQueue(value);
         queue.remove(value);
     }
     
     @Override
     protected void onValueRead(CachedValue<K, V> value) {
-        Collection<CachedValue<K, V>> queue = getQueue(value);
-        // move value to tail of queue 
+        SortedSet<CachedValue<K, V>> queue = getQueue(value);
+        // move value to the tail of the queue
         if (queue.remove(value)) {
             queue.add(value);
         }
@@ -76,29 +106,26 @@ public class LRUCacheMap<K, V> extends AbstractCacheMap<K, V> {
     protected void onMapFull() {
         int startIndex = -1;
         while (true) {
-            int queueIndex = (int)Math.abs(index.incrementAndGet() % queues.size());
+            int queueIndex = (int) Math.abs(index.incrementAndGet() % queues.size());
             if (queueIndex == startIndex) {
                 return;
             }
             if (startIndex == -1) {
                 startIndex = queueIndex;
             }
-            Collection<CachedValue<K, V>> queue = queues.get(queueIndex);
-            synchronized (queue) {
-                Iterator<CachedValue<K, V>> iter = queue.iterator();
-                if (iter.hasNext()) {
-                    CachedValue<K, V> value = iter.next();
-                    iter.remove();
-                    map.remove(value.getKey(), value);
-                    return;
-                }
+
+            SortedSet<CachedValue<K, V>> queue = queues.get(queueIndex);
+            CachedValue<K, V> removedValue = queue.removeFirst();
+            if (removedValue != null) {
+                map.remove(removedValue.getKey(), removedValue);
+                return;
             }
         }
     }
     
     @Override
     public void clear() {
-        for (Collection<CachedValue<K, V>> collection : queues) {
+        for (SortedSet<CachedValue<K, V>> collection : queues) {
             collection.clear();
         }
         super.clear();

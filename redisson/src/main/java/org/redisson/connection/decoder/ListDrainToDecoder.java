@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,12 +15,11 @@
  */
 package org.redisson.connection.decoder;
 
+import org.redisson.client.handler.State;
+import org.redisson.client.protocol.decoder.MultiDecoder;
+
 import java.util.Collection;
 import java.util.List;
-
-import org.redisson.client.handler.State;
-import org.redisson.client.protocol.Decoder;
-import org.redisson.client.protocol.decoder.MultiDecoder;
 
 public class ListDrainToDecoder<V> implements MultiDecoder<Integer> {
 
@@ -34,11 +33,6 @@ public class ListDrainToDecoder<V> implements MultiDecoder<Integer> {
     public Integer decode(List<Object> parts, State state) {
         list.addAll(parts);
         return parts.size();
-    }
-
-    @Override
-    public Decoder<Object> getDecoder(int paramNum, State state) {
-        return null;
     }
 
 }

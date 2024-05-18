@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,55 +15,49 @@
  */
 package org.redisson.jcache;
 
-import java.io.IOException;
-import java.nio.ByteOrder;
-import java.util.ArrayList;
-import java.util.List;
-
+import io.netty.buffer.ByteBuf;
 import org.redisson.client.codec.Codec;
 import org.redisson.client.handler.State;
 import org.redisson.client.protocol.Decoder;
-import org.redisson.client.protocol.Encoder;
+import org.redisson.codec.BaseEventCodec;
 
-import io.netty.buffer.ByteBuf;
-import io.netty.util.internal.PlatformDependent;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 
  * @author Nikita Koksharov
  *
  */
-public class JCacheEventCodec implements Codec {
+public class JCacheEventCodec extends BaseEventCodec {
 
-    private final Codec codec;
     private final boolean sync;
+    private final boolean expectOldValueInMsg;
     
     private final Decoder<Object> decoder = new Decoder<Object>() {
         @Override
         public Object decode(ByteBuf buf, State state) throws IOException {
-            List<Object> result = new ArrayList<Object>();
-            int keyLen;
-            if (PlatformDependent.isWindows()) {
-                keyLen = buf.readIntLE();
-            } else {
-                keyLen = (int) buf.readLongLE();
-            }
-            ByteBuf keyBuf = buf.readSlice(keyLen);
-            Object key = codec.getMapKeyDecoder().decode(keyBuf, state);
+            List<Object> result = new ArrayList<>();
+
+            Object key = JCacheEventCodec.this.decode(buf, state, codec.getMapKeyDecoder());
             result.add(key);
 
-            int valueLen;
-            if (PlatformDependent.isWindows()) {
-                valueLen = buf.readIntLE();
-            } else {
-                valueLen = (int) buf.readLongLE();
-            }
-            ByteBuf valueBuf = buf.readSlice(valueLen);
-            Object value = codec.getMapValueDecoder().decode(valueBuf, state);
+            Object value = JCacheEventCodec.this.decode(buf, state, codec.getMapValueDecoder());
             result.add(value);
+
+            if (expectOldValueInMsg) {
+                if (buf.getShortLE(buf.readerIndex()) != -1) {
+                    Object oldValue = JCacheEventCodec.this.decode(buf, state, codec.getMapValueDecoder());
+                    result.add(oldValue);
+                } else {
+                    buf.readShortLE();
+                    result.add(null);
+                }
+            }
             
             if (sync) {
-                double syncId = buf.order(ByteOrder.LITTLE_ENDIAN).readDouble();
+                double syncId = buf.readDoubleLE();
                 result.add(syncId);
             }
             
@@ -71,45 +65,21 @@ public class JCacheEventCodec implements Codec {
         }
     };
 
-    public JCacheEventCodec(Codec codec, boolean sync) {
-        super();
-        this.codec = codec;
+    public JCacheEventCodec(Codec codec, OSType osType, boolean sync) {
+        super(codec, osType);
         this.sync = sync;
+        this.expectOldValueInMsg = false;
     }
 
-    @Override
-    public Decoder<Object> getMapValueDecoder() {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public Encoder getMapValueEncoder() {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public Decoder<Object> getMapKeyDecoder() {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public Encoder getMapKeyEncoder() {
-        throw new UnsupportedOperationException();
+    public JCacheEventCodec(Codec codec, OSType osType, boolean sync, boolean expectOldValueInMsg) {
+        super(codec, osType);
+        this.sync = sync;
+        this.expectOldValueInMsg = expectOldValueInMsg;
     }
 
     @Override
     public Decoder<Object> getValueDecoder() {
         return decoder;
-    }
-
-    @Override
-    public Encoder getValueEncoder() {
-        throw new UnsupportedOperationException();
-    }
-    
-    @Override
-    public ClassLoader getClassLoader() {
-        return getClass().getClassLoader();
     }
 
 }

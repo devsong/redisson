@@ -1,16 +1,28 @@
 package org.redisson;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import org.awaitility.Awaitility;
+import org.junit.jupiter.api.Test;
+import org.redisson.api.RMultimapCache;
 
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 
-import org.junit.Test;
-import org.redisson.api.RMultimapCache;
+import static org.assertj.core.api.Assertions.assertThat;
 
-public abstract class RedissonBaseMultimapCacheTest extends BaseTest {
+public abstract class RedissonBaseMultimapCacheTest extends RedisDockerTest {
 
     abstract RMultimapCache<String, String> getMultimapCache(String name);
+    
+    @Test
+    public void testRemoveAll() {
+        RMultimapCache<String, String> multimap = getMultimapCache("test");
+        multimap.put("1", "1");
+        multimap.put("1", "2");
+
+        multimap.removeAll("1");
+        assertThat(multimap.size()).isZero();
+    }
     
     @Test
     public void testContains() {
@@ -96,7 +108,7 @@ public abstract class RedissonBaseMultimapCacheTest extends BaseTest {
     }
 
     @Test
-    public void testScheduler() throws InterruptedException {
+    public void testScheduler() {
         RMultimapCache<String, String> cache = getMultimapCache("simple33");
         assertThat(cache.put("1", "1")).isTrue();
         assertThat(cache.put("1", "2")).isTrue();
@@ -110,11 +122,8 @@ public abstract class RedissonBaseMultimapCacheTest extends BaseTest {
         assertThat(cache.expireKey("3", 3, TimeUnit.SECONDS)).isFalse();
         
         assertThat(cache.size()).isEqualTo(6);
-        
-        Thread.sleep(10000);
 
-        assertThat(cache.size()).isZero();
-
+        Awaitility.await().atMost(Duration.ofSeconds(13)).untilAsserted(() -> assertThat(cache.size()).isZero());
     }
 
     @Test
@@ -123,7 +132,7 @@ public abstract class RedissonBaseMultimapCacheTest extends BaseTest {
         map.put("1", "2");
         map.put("2", "3");
 
-        map.expire(100, TimeUnit.MILLISECONDS);
+        map.expire(Duration.ofMillis(100));
 
         Thread.sleep(500);
 

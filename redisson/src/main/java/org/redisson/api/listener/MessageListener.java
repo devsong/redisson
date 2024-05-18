@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +26,7 @@ import java.util.EventListener;
  *
  * @see org.redisson.api.RTopic
  */
+@FunctionalInterface
 public interface MessageListener<M> extends EventListener {
 
     /**
@@ -34,6 +35,6 @@ public interface MessageListener<M> extends EventListener {
      * @param channel of topic
      * @param msg topic message
      */
-    void onMessage(String channel, M msg);
+    void onMessage(CharSequence channel, M msg);
 
 }

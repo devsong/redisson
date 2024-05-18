@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,23 +17,24 @@ package org.redisson.api;
 
 import java.util.Set;
 
-import org.reactivestreams.Publisher;
+import reactor.core.publisher.Mono;
 
 /**
+ * Base Reactive interface for Multimap object
  * 
  * @author Nikita Koksharov
  *
  * @param <K> key type
  * @param <V> value type
  */
-public interface RMultimapReactive<K, V> {
+public interface RMultimapReactive<K, V> extends RExpirableReactive {
 
     /**
      * Returns the number of key-value pairs in this multimap.
      *
      * @return size of multimap
      */
-    Publisher<Integer> size();
+    Mono<Integer> size();
 
     /**
      * Returns {@code true} if this multimap contains at least one key-value pair
@@ -42,7 +43,7 @@ public interface RMultimapReactive<K, V> {
      * @param key - map key
      * @return <code>true</code> if contains a key
      */
-    Publisher<Boolean> containsKey(Object key);
+    Mono<Boolean> containsKey(Object key);
 
     /**
      * Returns {@code true} if this multimap contains at least one key-value pair
@@ -51,7 +52,7 @@ public interface RMultimapReactive<K, V> {
      * @param value - map value
      * @return <code>true</code> if contains a value
      */
-    Publisher<Boolean> containsValue(Object value);
+    Mono<Boolean> containsValue(Object value);
 
     /**
      * Returns {@code true} if this multimap contains at least one key-value pair
@@ -61,7 +62,7 @@ public interface RMultimapReactive<K, V> {
      * @param value - map value
      * @return <code>true</code> if contains an entry
      */
-    Publisher<Boolean> containsEntry(Object key, Object value);
+    Mono<Boolean> containsEntry(Object key, Object value);
 
     /**
      * Stores a key-value pair in this multimap.
@@ -77,7 +78,7 @@ public interface RMultimapReactive<K, V> {
      *     {@code false} if the multimap already contained the key-value pair and
      *     doesn't allow duplicates
      */
-    Publisher<Boolean> put(K key, V value);
+    Mono<Boolean> put(K key, V value);
 
     /**
      * Removes a single key-value pair with the key {@code key} and the value
@@ -89,7 +90,7 @@ public interface RMultimapReactive<K, V> {
      * @param value - map value
      * @return {@code true} if the multimap changed
      */
-    Publisher<Boolean> remove(Object key, Object value);
+    Mono<Boolean> remove(Object key, Object value);
 
     // Bulk Operations
 
@@ -108,14 +109,14 @@ public interface RMultimapReactive<K, V> {
      * @param values - map values
      * @return {@code true} if the multimap changed
      */
-    Publisher<Boolean> putAll(K key, Iterable<? extends V> values);
+    Mono<Boolean> putAll(K key, Iterable<? extends V> values);
 
     /**
      * Returns the number of key-value pairs in this multimap.
      *
      * @return keys amount
      */
-    Publisher<Integer> keySize();
+    Mono<Integer> keySize();
 
     /**
      * Removes <code>keys</code> from map by one operation
@@ -126,14 +127,22 @@ public interface RMultimapReactive<K, V> {
      * @param keys - map keys
      * @return the number of keys that were removed from the hash, not including specified but non existing keys
      */
-    Publisher<Long> fastRemove(K ... keys);
+    Mono<Long> fastRemove(K... keys);
+
+    /**
+     * Removes <code>values</code> from map by one operation
+     *
+     * @param values map values
+     * @return the number of values that were removed from the map
+     */
+    Mono<Long> fastRemoveValue(V... values);
 
     /**
      * Read all keys at once
      *
      * @return keys
      */
-    Publisher<Set<K>> readAllKeySet();
+    Mono<Set<K>> readAllKeySet();
 
     
 }

@@ -2,16 +2,34 @@ package org.redisson;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.Serializable;
+import java.util.Arrays;
+import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.UUID;
 
-import org.junit.Assert;
-import org.junit.Test;
+import avro.shaded.com.google.common.base.Objects;
+import org.jboss.marshalling.reflect.SerializableClassRegistry;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
 import org.redisson.api.RQueue;
 
-public class RedissonQueueTest extends BaseTest {
+public class RedissonQueueTest extends RedisDockerTest {
 
     <T> RQueue<T> getQueue() {
         return redisson.getQueue("queue");
+    }
+
+    @Test
+    public void testPollLimited() {
+        RQueue<Integer> queue = getQueue();
+        queue.addAll(Arrays.asList(1, 2, 3, 4, 5, 6, 7));
+        List<Integer> elements = queue.poll(3);
+        assertThat(elements).containsExactly(1, 2, 3);
+        List<Integer> elements2 = queue.poll(10);
+        assertThat(elements2).containsExactly(4, 5, 6, 7);
+        List<Integer> elements3 = queue.poll(5);
+        assertThat(elements3).isEmpty();
     }
     
     @Test
@@ -23,9 +41,35 @@ public class RedissonQueueTest extends BaseTest {
         queue.offer(4);
 
         assertThat(queue).containsExactly(1, 2, 3, 4);
-        Assert.assertEquals((Integer)1, queue.poll());
+        Assertions.assertEquals((Integer)1, queue.poll());
         assertThat(queue).containsExactly(2, 3, 4);
-        Assert.assertEquals((Integer)2, queue.element());
+        Assertions.assertEquals((Integer)2, queue.element());
+    }
+
+    public static class TestModel {
+        private String key;
+        private String traceId;
+        private long createdAt;
+        private UUID uuid = UUID.randomUUID();
+
+        public TestModel() {
+        }
+
+        public TestModel(String key, String traceId, long createdAt) {
+            this.key = key;
+            this.traceId = traceId;
+            this.createdAt = createdAt;
+        }
+
+    }
+
+    @Test
+    public void testRemoveWithCodec() {
+        RQueue<TestModel> queue = redisson.getQueue("queue");
+
+        TestModel msg = new TestModel("key", "traceId", 0L);
+        queue.add(msg);
+        assertThat(queue.contains(queue.peek())).isTrue();
     }
 
     @Test
@@ -43,13 +87,15 @@ public class RedissonQueueTest extends BaseTest {
         queue.remove();
         queue.remove();
 
-        Assert.assertTrue(queue.isEmpty());
+        Assertions.assertTrue(queue.isEmpty());
     }
 
-    @Test(expected = NoSuchElementException.class)
+    @Test
     public void testRemoveEmpty() {
-        RQueue<Integer> queue = getQueue();
-        queue.remove();
+        Assertions.assertThrows(NoSuchElementException.class, () -> {
+            RQueue<Integer> queue = getQueue();
+            queue.remove();
+        });
     }
 
 }

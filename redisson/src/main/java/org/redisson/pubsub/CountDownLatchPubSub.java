@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,9 +15,9 @@
  */
 package org.redisson.pubsub;
 
-import org.redisson.RedissonCountDownLatch;
 import org.redisson.RedissonCountDownLatchEntry;
-import org.redisson.misc.RPromise;
+
+import java.util.concurrent.CompletableFuture;
 
 /**
  * 
@@ -26,17 +26,30 @@ import org.redisson.misc.RPromise;
  */
 public class CountDownLatchPubSub extends PublishSubscribe<RedissonCountDownLatchEntry> {
 
+    public static final Long ZERO_COUNT_MESSAGE = 0L;
+    public static final Long NEW_COUNT_MESSAGE = 1L;
+    
+    public CountDownLatchPubSub(PublishSubscribeService service) {
+        super(service);
+    }
+
     @Override
-    protected RedissonCountDownLatchEntry createEntry(RPromise<RedissonCountDownLatchEntry> newPromise) {
+    protected RedissonCountDownLatchEntry createEntry(CompletableFuture<RedissonCountDownLatchEntry> newPromise) {
         return new RedissonCountDownLatchEntry(newPromise);
     }
 
     @Override
     protected void onMessage(RedissonCountDownLatchEntry value, Long message) {
-        if (message.equals(RedissonCountDownLatch.zeroCountMessage)) {
+        if (message.equals(ZERO_COUNT_MESSAGE)) {
+            Runnable runnableToExecute = value.getListeners().poll();
+            while (runnableToExecute != null) {
+                runnableToExecute.run();
+                runnableToExecute = value.getListeners().poll();
+            }
+
             value.getLatch().open();
         }
-        if (message.equals(RedissonCountDownLatch.newCountMessage)) {
+        if (message.equals(NEW_COUNT_MESSAGE)) {
             value.getLatch().close();
         }
     }

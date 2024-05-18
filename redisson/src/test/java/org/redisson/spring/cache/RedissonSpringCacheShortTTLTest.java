@@ -1,36 +1,35 @@
 package org.redisson.spring.cache;
 
-import static org.assertj.core.api.Assertions.assertThat;
-
-import java.io.IOException;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Map;
-
-import org.junit.AfterClass;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
-import org.redisson.BaseTest;
-import org.redisson.RedisRunner;
-import org.redisson.RedisRunner.RedisProcess;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.redisson.RedisDockerTest;
 import org.redisson.api.RedissonClient;
 import org.springframework.cache.CacheManager;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.CachePut;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.cache.annotation.EnableCaching;
-import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.stereotype.Service;
 
-@RunWith(Parameterized.class)
-public class RedissonSpringCacheShortTTLTest {
+import java.io.IOException;
+import java.io.Serializable;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
-    public static class SampleObject {
+import static org.assertj.core.api.Assertions.assertThat;
+
+public class RedissonSpringCacheShortTTLTest extends RedisDockerTest {
+
+    public static class SampleObject implements Serializable {
 
         private String name;
         private String value;
@@ -95,7 +94,7 @@ public class RedissonSpringCacheShortTTLTest {
 
         @Bean(destroyMethod = "shutdown")
         RedissonClient redisson() {
-            return BaseTest.createInstance();
+            return createInstance();
         }
 
         @Bean
@@ -114,61 +113,57 @@ public class RedissonSpringCacheShortTTLTest {
 
         @Bean(destroyMethod = "shutdown")
         RedissonClient redisson() {
-            return BaseTest.createInstance();
+            return createInstance();
         }
 
         @Bean
-        CacheManager cacheManager(RedissonClient redissonClient) throws IOException {
+        CacheManager cacheManager(RedissonClient redissonClient) {
             return new RedissonSpringCacheManager(redissonClient, "classpath:/org/redisson/spring/cache/cache-config-shortTTL.json");
         }
 
     }
 
-    private static RedisProcess p;
+    private static Map<Class<?>, AnnotationConfigApplicationContext> contexts;
 
-    @Parameterized.Parameters(name = "{index} - {0}")
-    public static Iterable<Object[]> data() throws IOException, InterruptedException {
-        if (p == null) {
-            p = RedisRunner.startDefaultRedisServerInstance();
-        }
-        return Arrays.asList(new Object[][]{
-            {new AnnotationConfigApplicationContext(Application.class)},
-            {new AnnotationConfigApplicationContext(JsonConfigApplication.class)},
-        });
+    public static List<Class<?>> data() {
+        return Arrays.asList(Application.class, JsonConfigApplication.class);
     }
 
-    @Parameterized.Parameter(0)
-    public AnnotationConfigApplicationContext context;
-    
-    @AfterClass
-    public static void after() throws InterruptedException, IOException {
-        RedissonSpringCacheShortTTLTest.data().forEach(e -> ((ConfigurableApplicationContext) e[0]).close());
-        RedisRunner.shutDownDefaultRedisServerInstance();
+    @BeforeAll
+    public static void before() {
+        contexts = data().stream().collect(Collectors.toMap(e -> e, e -> new AnnotationConfigApplicationContext(e)));
     }
 
-    @Test(expected = IllegalStateException.class)
-    public void testPutGet() throws InterruptedException {
+    @ParameterizedTest
+    @MethodSource("data")
+    public void testPutGet(Class<?> contextClass) throws InterruptedException {
+        AnnotationConfigApplicationContext context = contexts.get(contextClass);
         SampleBean bean = context.getBean(SampleBean.class);
         bean.store("object1", new SampleObject("name1", "value1"));
         SampleObject s = bean.read("object1");
         assertThat(s.getName()).isEqualTo("name1");
         assertThat(s.getValue()).isEqualTo("value1");
-        
+
         Thread.sleep(1100);
-        
-        bean.read("object1");
+
+        Assertions.assertThrows(IllegalStateException.class, () -> {
+            bean.read("object1");
+        });
     }
 
-    
-    @Test(expected = IllegalStateException.class)
-    public void testPutGetSync() throws InterruptedException {
+    @ParameterizedTest
+    @MethodSource("data")
+    public void testPutGetSync(Class<?> contextClass) throws InterruptedException {
+        AnnotationConfigApplicationContext context = contexts.get(contextClass);
         SampleBean bean = context.getBean(SampleBean.class);
         bean.readNullSync("object1");
         assertThat(bean.read("object1")).isNull();
-        
+
         Thread.sleep(1100);
-        
-        bean.read("object1");
+
+        Assertions.assertThrows(IllegalStateException.class, () -> {
+            bean.read("object1");
+        });
     }
 
 }

@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,11 +15,12 @@
  */
 package org.redisson.client.protocol.decoder;
 
-import java.util.List;
-
-import org.redisson.client.codec.LongCodec;
+import org.redisson.client.codec.Codec;
+import org.redisson.client.codec.StringCodec;
 import org.redisson.client.handler.State;
 import org.redisson.client.protocol.Decoder;
+
+import java.util.List;
 
 /**
  * 
@@ -29,13 +30,13 @@ import org.redisson.client.protocol.Decoder;
 public class ListScanResultReplayDecoder implements MultiDecoder<ListScanResult<Object>> {
 
     @Override
-    public Decoder<Object> getDecoder(int paramNum, State state) {
-        return null;
+    public Decoder<Object> getDecoder(Codec codec, int paramNum, State state, long size) {
+        return StringCodec.INSTANCE.getValueDecoder();
     }
     
     @Override
     public ListScanResult<Object> decode(List<Object> parts, State state) {
-        return new ListScanResult<Object>((Long)parts.get(0), (List<Object>)parts.get(1));
+        return new ListScanResult<>((String) parts.get(0), (List<Object>) parts.get(1));
     }
 
 }

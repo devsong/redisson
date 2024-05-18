@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
  */
 package org.redisson;
 
+import java.io.InputStream;
 import java.net.URL;
 import java.util.Enumeration;
 import java.util.jar.Attributes;
@@ -31,16 +32,18 @@ public class Version {
         try {
             Enumeration<URL> resources = Version.class.getClassLoader().getResources("META-INF/MANIFEST.MF");
             while (resources.hasMoreElements()) {
-                    Manifest manifest = new Manifest(resources.nextElement().openStream());
+                try (InputStream inputStream = resources.nextElement().openStream()) {
+                    Manifest manifest = new Manifest(inputStream);
                     Attributes attrs = manifest.getMainAttributes();
                     if (attrs == null) {
                         continue;
                     }
                     String name = attrs.getValue("Bundle-Name");
-                    if (name != null && name.equals("Redisson")) {
-                        log.info("Redisson " + attrs.getValue("Bundle-Version"));
+                    if ("Redisson".equals(name)) {
+                        log.info("Redisson {}", attrs.getValue("Bundle-Version"));
                         break;
                     }
+                }
             }
         } catch (Exception E) {
             // skip it

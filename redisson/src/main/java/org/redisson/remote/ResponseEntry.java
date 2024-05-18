@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,13 +15,13 @@
  */
 package org.redisson.remote;
 
+import io.netty.util.Timeout;
+
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
-
-import org.redisson.misc.RPromise;
 
 /**
  * 
@@ -31,30 +31,30 @@ import org.redisson.misc.RPromise;
 public class ResponseEntry {
 
     public static class Result {
+
+        private final CompletableFuture<? extends RRemoteServiceResponse> promise;
+        private final Timeout responseTimeoutFuture;
         
-        private final RPromise<? extends RRemoteServiceResponse> promise;
-        private final ScheduledFuture<?> scheduledFuture;
-        
-        public Result(RPromise<? extends RRemoteServiceResponse> promise, ScheduledFuture<?> scheduledFuture) {
+        public Result(CompletableFuture<? extends RRemoteServiceResponse> promise, Timeout responseTimeoutFuture) {
             super();
             this.promise = promise;
-            this.scheduledFuture = scheduledFuture;
+            this.responseTimeoutFuture = responseTimeoutFuture;
         }
         
-        public <T extends RRemoteServiceResponse> RPromise<T> getPromise() {
-            return (RPromise<T>) promise;
+        public <T extends RRemoteServiceResponse> CompletableFuture<T> getPromise() {
+            return (CompletableFuture<T>) promise;
         }
         
-        public ScheduledFuture<?> getScheduledFuture() {
-            return scheduledFuture;
+        public void cancelResponseTimeout() {
+            responseTimeoutFuture.cancel();
         }
         
     }
     
-    private final Map<RequestId, List<Result>> responses = new HashMap<RequestId, List<Result>>();
+    private final Map<String, List<Result>> responses = new HashMap<String, List<Result>>();
     private final AtomicBoolean started = new AtomicBoolean(); 
     
-    public Map<RequestId, List<Result>> getResponses() {
+    public Map<String, List<Result>> getResponses() {
         return responses;
     }
     

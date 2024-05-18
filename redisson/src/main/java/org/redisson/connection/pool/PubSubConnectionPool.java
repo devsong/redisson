@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,13 +15,15 @@
  */
 package org.redisson.connection.pool;
 
-import org.redisson.api.RFuture;
 import org.redisson.client.RedisPubSubConnection;
 import org.redisson.client.protocol.RedisCommands;
 import org.redisson.config.MasterSlaveServersConfig;
 import org.redisson.connection.ClientConnectionsEntry;
 import org.redisson.connection.ConnectionManager;
+import org.redisson.connection.ConnectionsHolder;
 import org.redisson.connection.MasterSlaveEntry;
+
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Connection pool for Publish / Subscribe
@@ -35,38 +37,17 @@ public class PubSubConnectionPool extends ConnectionPool<RedisPubSubConnection> 
         super(config, connectionManager, masterSlaveEntry);
     }
 
-    public RFuture<RedisPubSubConnection> get() {
-        return get(RedisCommands.PUBLISH);
+    public CompletableFuture<RedisPubSubConnection> get() {
+        return get(RedisCommands.SUBSCRIBE, false);
     }
-    
-    @Override
-    protected RedisPubSubConnection poll(ClientConnectionsEntry entry) {
-        return entry.pollSubscribeConnection();
+
+    public CompletableFuture<RedisPubSubConnection> get(ClientConnectionsEntry entry) {
+        return get(RedisCommands.SUBSCRIBE, entry, false);
     }
 
     @Override
-    protected int getMinimumIdleSize(ClientConnectionsEntry entry) {
-        return config.getSubscriptionConnectionMinimumIdleSize();
-    }
-
-    @Override
-    protected RFuture<RedisPubSubConnection> connect(ClientConnectionsEntry entry) {
-        return entry.connectPubSub();
-    }
-
-    @Override
-    protected void acquireConnection(ClientConnectionsEntry entry, Runnable runnable) {
-        entry.acquireSubscribeConnection(runnable);
-    }
-    
-    @Override
-    protected void releaseConnection(ClientConnectionsEntry entry) {
-        entry.releaseSubscribeConnection();
-    }
-
-    @Override
-    protected void releaseConnection(ClientConnectionsEntry entry, RedisPubSubConnection conn) {
-        entry.releaseSubscribeConnection(conn);
+    protected ConnectionsHolder<RedisPubSubConnection> getConnectionHolder(ClientConnectionsEntry entry, boolean trackChanges) {
+        return entry.getPubSubConnectionsHolder();
     }
 
 }

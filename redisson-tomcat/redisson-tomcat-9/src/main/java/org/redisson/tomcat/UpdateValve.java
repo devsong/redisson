@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,9 +16,11 @@
 package org.redisson.tomcat;
 
 import java.io.IOException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import javax.servlet.ServletException;
 
+import org.apache.catalina.Manager;
 import org.apache.catalina.connector.Request;
 import org.apache.catalina.connector.Response;
 import org.apache.catalina.valves.ValveBase;
@@ -31,19 +33,51 @@ import org.apache.catalina.valves.ValveBase;
  */
 public class UpdateValve extends ValveBase {
 
-    private final RedissonSessionManager manager;
-    
-    public UpdateValve(RedissonSessionManager manager) {
-        super();
-        this.manager = manager;
+    private static final String ALREADY_FILTERED_NOTE = UpdateValve.class.getName() + ".ALREADY_FILTERED_NOTE";
+
+    private final AtomicInteger usage = new AtomicInteger(1);
+
+    public UpdateValve() {
+        super(true);
+    }
+
+    public void incUsage() {
+        usage.incrementAndGet();
+    }
+
+    public int decUsage() {
+        return usage.decrementAndGet();
     }
 
     @Override
     public void invoke(Request request, Response response) throws IOException, ServletException {
-        try {
+        if (getNext() == null) {
+            return;
+        }
+
+        //check if we already filtered/processed this request
+        if (request.getNote(ALREADY_FILTERED_NOTE) == null) {
+            request.setNote(ALREADY_FILTERED_NOTE, Boolean.TRUE);
+            try {
+                getNext().invoke(request, response);
+            } finally {
+                request.removeNote(ALREADY_FILTERED_NOTE);
+                if (request.getContext() == null) {
+                    return;
+                }
+
+                final ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+                try {
+                    ClassLoader applicationClassLoader = request.getContext().getLoader().getClassLoader();
+                    Thread.currentThread().setContextClassLoader(applicationClassLoader);
+                    Manager manager = request.getContext().getManager();
+                    ((RedissonSessionManager)manager).store(request.getSession(false));
+                } finally {
+                    Thread.currentThread().setContextClassLoader(classLoader);
+                }
+            }
+        } else {
             getNext().invoke(request, response);
-        } finally {
-            manager.store(request.getSession(false));
         }
     }
 

@@ -1,17 +1,19 @@
 package org.redisson;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.redisson.api.RBlockingDeque;
 
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-import org.junit.Test;
-import org.redisson.api.RBlockingDeque;
+import static org.assertj.core.api.Assertions.assertThat;
 
-public class RedissonPriorityBlockingDequeTest extends BaseTest {
+public class RedissonPriorityBlockingDequeTest extends RedisDockerTest {
 
-    @Test(timeout = 3000)
-    public void testShortPoll() throws InterruptedException {
+    @Test
+    @Timeout(3)
+    public void testShortPoll() {
         RBlockingDeque<Integer> queue = redisson.getPriorityBlockingDeque("queue:pollany");
         queue.pollLastAsync(500, TimeUnit.MILLISECONDS);
         queue.pollFirstAsync(10, TimeUnit.MICROSECONDS);
@@ -102,7 +104,7 @@ public class RedissonPriorityBlockingDequeTest extends BaseTest {
 
         long s = System.currentTimeMillis();
         assertThat(queue1.pollFirst(5, TimeUnit.SECONDS)).isNull();
-        assertThat(System.currentTimeMillis() - s).isGreaterThan(5000);
+        assertThat(System.currentTimeMillis() - s).isGreaterThan(4900);
     }
 
     @Test

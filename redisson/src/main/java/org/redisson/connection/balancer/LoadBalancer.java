@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,12 +15,26 @@
  */
 package org.redisson.connection.balancer;
 
-import java.util.List;
-
+import org.redisson.client.protocol.RedisCommand;
 import org.redisson.connection.ClientConnectionsEntry;
 
+import java.util.List;
+
+/**
+ * 
+ * @author Nikita Koksharov
+ *
+ */
 public interface LoadBalancer {
 
+    /*
+     * Use getEntry(List, RedisCommand) method instead
+     */
+    @Deprecated
     ClientConnectionsEntry getEntry(List<ClientConnectionsEntry> clientsCopy);
+
+    default ClientConnectionsEntry getEntry(List<ClientConnectionsEntry> clientsCopy, RedisCommand<?> redisCommand) {
+        return getEntry(clientsCopy);
+    }
 
 }

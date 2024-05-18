@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,8 @@
  */
 package org.redisson.config;
 
+import org.redisson.client.FailedConnectionDetector;
+import org.redisson.client.FailedNodeDetector;
 import org.redisson.connection.balancer.LoadBalancer;
 import org.redisson.connection.balancer.RoundRobinLoadBalancer;
 
@@ -34,17 +36,22 @@ public class BaseMasterSlaveServersConfig<T extends BaseMasterSlaveServersConfig
     /**
      * Redis 'slave' node minimum idle connection amount for <b>each</b> slave node
      */
-    private int slaveConnectionMinimumIdleSize = 32;
+    private int slaveConnectionMinimumIdleSize = 24;
 
     /**
      * Redis 'slave' node maximum connection pool size for <b>each</b> slave node
      */
     private int slaveConnectionPoolSize = 64;
 
+    private int failedSlaveReconnectionInterval = 3000;
+
+    @Deprecated
+    private int failedSlaveCheckInterval = 180000;
+    
     /**
      * Redis 'master' node minimum idle connection amount for <b>each</b> slave node
      */
-    private int masterConnectionMinimumIdleSize = 32;
+    private int masterConnectionMinimumIdleSize = 24;
 
     /**
      * Redis 'master' node maximum connection pool size
@@ -53,7 +60,7 @@ public class BaseMasterSlaveServersConfig<T extends BaseMasterSlaveServersConfig
 
     private ReadMode readMode = ReadMode.SLAVE;
     
-    private SubscriptionMode subscriptionMode = SubscriptionMode.SLAVE;
+    private SubscriptionMode subscriptionMode = SubscriptionMode.MASTER;
     
     /**
      * Redis 'slave' node minimum idle subscription (pub/sub) connection amount for <b>each</b> slave node
@@ -66,6 +73,8 @@ public class BaseMasterSlaveServersConfig<T extends BaseMasterSlaveServersConfig
     private int subscriptionConnectionPoolSize = 50;
 
     private long dnsMonitoringInterval = 5000;
+
+    private FailedNodeDetector failedSlaveNodeDetector = new FailedConnectionDetector();
     
     public BaseMasterSlaveServersConfig() {
     }
@@ -82,6 +91,8 @@ public class BaseMasterSlaveServersConfig<T extends BaseMasterSlaveServersConfig
         setReadMode(config.getReadMode());
         setSubscriptionMode(config.getSubscriptionMode());
         setDnsMonitoringInterval(config.getDnsMonitoringInterval());
+        setFailedSlaveReconnectionInterval(config.getFailedSlaveReconnectionInterval());
+        setFailedSlaveNodeDetector(config.getFailedSlaveNodeDetector());
     }
 
     /**
@@ -96,10 +107,51 @@ public class BaseMasterSlaveServersConfig<T extends BaseMasterSlaveServersConfig
      */
     public T setSlaveConnectionPoolSize(int slaveConnectionPoolSize) {
         this.slaveConnectionPoolSize = slaveConnectionPoolSize;
-        return (T)this;
+        return (T) this;
     }
     public int getSlaveConnectionPoolSize() {
         return slaveConnectionPoolSize;
+    }
+    
+    /**
+     * When the retry interval <code>failedSlavesReconnectionTimeout<code/>
+     * reached Redisson tries to connect to failed Redis node reported by <code>failedSlaveNodeDetector</code>.
+     * <p>
+     * On every such timeout event Redisson tries
+     * to connect to failed Redis server.
+     * <p>
+     * Default is 3000
+     *
+     * @param failedSlavesReconnectionTimeout - retry timeout in milliseconds
+     * @return config
+     */
+
+    public T setFailedSlaveReconnectionInterval(int failedSlavesReconnectionTimeout) {
+        this.failedSlaveReconnectionInterval = failedSlavesReconnectionTimeout;
+        return (T) this;
+    }
+
+    public int getFailedSlaveReconnectionInterval() {
+        return failedSlaveReconnectionInterval;
+    }
+
+    
+    /**
+     * Use {@link #setFailedSlaveNodeDetector(FailedNodeDetector)} instead.
+     *
+     * @param slaveFailsInterval - time interval in milliseconds
+     * @return config
+     */
+    @Deprecated
+    public T setFailedSlaveCheckInterval(int slaveFailsInterval) {
+        log.error("failedSlaveCheckInterval setting is deprecated and will be removed in future releases. Use failedSlaveNodeDetector setting instead");
+        this.failedSlaveCheckInterval = slaveFailsInterval;
+        this.failedSlaveNodeDetector = new FailedConnectionDetector(slaveFailsInterval);
+        return (T) this;
+    }
+    @Deprecated
+    public int getFailedSlaveCheckInterval() {
+        return failedSlaveCheckInterval;
     }
 
     /**
@@ -115,7 +167,7 @@ public class BaseMasterSlaveServersConfig<T extends BaseMasterSlaveServersConfig
      */
     public T setMasterConnectionPoolSize(int masterConnectionPoolSize) {
         this.masterConnectionPoolSize = masterConnectionPoolSize;
-        return (T)this;
+        return (T) this;
     }
     public int getMasterConnectionPoolSize() {
         return masterConnectionPoolSize;
@@ -134,29 +186,14 @@ public class BaseMasterSlaveServersConfig<T extends BaseMasterSlaveServersConfig
      */
     public T setLoadBalancer(LoadBalancer loadBalancer) {
         this.loadBalancer = loadBalancer;
-        return (T)this;
+        return (T) this;
     }
     public LoadBalancer getLoadBalancer() {
         return loadBalancer;
     }
 
     /**
-     * @deprecated use {@link #setSubscriptionConnectionPoolSize(int)}
-     * 
-     * @param slaveSubscriptionConnectionPoolSize - pool size
-     * @return config
-     */
-    @Deprecated
-    public T setSlaveSubscriptionConnectionPoolSize(int slaveSubscriptionConnectionPoolSize) {
-        return setSubscriptionConnectionPoolSize(slaveSubscriptionConnectionPoolSize);
-    }
-    @Deprecated
-    public int getSlaveSubscriptionConnectionPoolSize() {
-        return getSubscriptionConnectionPoolSize();
-    }
-
-    /**
-     * Redis 'slave' node maximum subscription (pub/sub) connection pool size for <b>each</b> slave node
+     * Maximum connection pool size for subscription (pub/sub) channels
      * <p>
      * Default is <code>50</code>
      * <p>
@@ -167,7 +204,7 @@ public class BaseMasterSlaveServersConfig<T extends BaseMasterSlaveServersConfig
      */
     public T setSubscriptionConnectionPoolSize(int subscriptionConnectionPoolSize) {
         this.subscriptionConnectionPoolSize = subscriptionConnectionPoolSize;
-        return (T)this;
+        return (T) this;
     }
     public int getSubscriptionConnectionPoolSize() {
         return subscriptionConnectionPoolSize;
@@ -175,9 +212,9 @@ public class BaseMasterSlaveServersConfig<T extends BaseMasterSlaveServersConfig
 
     
     /**
-     * Redis 'slave' node minimum idle connection amount for <b>each</b> slave node
+     * Minimum idle connection pool size for subscription (pub/sub) channels
      * <p>
-     * Default is <code>10</code>
+     * Default is <code>24</code>
      * <p>
      * @see #setSlaveConnectionPoolSize(int)
      * 
@@ -195,7 +232,7 @@ public class BaseMasterSlaveServersConfig<T extends BaseMasterSlaveServersConfig
     /**
      * Redis 'master' node minimum idle connection amount for <b>each</b> slave node
      * <p>
-     * Default is <code>10</code>
+     * Default is <code>24</code>
      * <p>
      * @see #setMasterConnectionPoolSize(int)
      * 
@@ -208,21 +245,6 @@ public class BaseMasterSlaveServersConfig<T extends BaseMasterSlaveServersConfig
     }
     public int getMasterConnectionMinimumIdleSize() {
         return masterConnectionMinimumIdleSize;
-    }
-
-    /**
-     * @deprecated use {@link #setSubscriptionConnectionMinimumIdleSize(int)}
-     * 
-     * @param slaveSubscriptionConnectionMinimumIdleSize - pool size
-     * @return config
-     */
-    @Deprecated
-    public T setSlaveSubscriptionConnectionMinimumIdleSize(int slaveSubscriptionConnectionMinimumIdleSize) {
-        return setSubscriptionConnectionMinimumIdleSize(slaveSubscriptionConnectionMinimumIdleSize);
-    }
-    @Deprecated
-    public int getSlaveSubscriptionConnectionMinimumIdleSize() {
-        return getSubscriptionConnectionMinimumIdleSize();
     }
 
     /**
@@ -260,14 +282,14 @@ public class BaseMasterSlaveServersConfig<T extends BaseMasterSlaveServersConfig
         return readMode;
     }
     
-    public boolean checkSkipSlavesInit() {
+    public boolean isSlaveNotUsed() {
         return getReadMode() == ReadMode.MASTER && getSubscriptionMode() == SubscriptionMode.MASTER;
     }
 
     /**
      * Set node type used for subscription operation.
      * <p>
-     * Default is <code>SLAVE</code>
+     * Default is <code>MASTER</code>
      *
      * @param subscriptionMode param
      * @return config
@@ -297,5 +319,27 @@ public class BaseMasterSlaveServersConfig<T extends BaseMasterSlaveServersConfig
     public long getDnsMonitoringInterval() {
         return dnsMonitoringInterval;
     }
-    
+
+    /**
+     * Defines failed Redis Slave node detector object
+     * which implements failed node detection logic.
+     * <p>
+     * Default is <code>org.redisson.client.FailedConnectionDetector</code>
+     *
+     * @param failedNodeDetector Redis Slave node detector object
+     * @return config
+     *
+     * @see org.redisson.client.FailedConnectionDetector
+     * @see org.redisson.client.FailedCommandsDetector
+     * @see org.redisson.client.FailedCommandsTimeoutDetector
+     *
+     */
+    public T setFailedSlaveNodeDetector(FailedNodeDetector failedNodeDetector) {
+        this.failedSlaveNodeDetector = failedNodeDetector;
+        return (T) this;
+    }
+    public FailedNodeDetector getFailedSlaveNodeDetector() {
+        return failedSlaveNodeDetector;
+    }
+
 }

@@ -1,29 +1,33 @@
 package org.redisson;
 
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+import org.redisson.api.RCountDownLatch;
+import org.testcontainers.shaded.org.awaitility.Awaitility;
+
+import java.time.Duration;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
-import org.junit.Assert;
-import org.junit.Test;
-import org.redisson.api.RCountDownLatch;
+import static org.assertj.core.api.Assertions.assertThat;
 
-import static org.assertj.core.api.Assertions.*;
-
-public class RedissonCountDownLatchTest extends BaseTest {
+public class RedissonCountDownLatchTest extends RedisDockerTest {
 
     @Test
     public void testAwaitTimeout() throws InterruptedException {
         ExecutorService executor = Executors.newFixedThreadPool(2);
 
         final RCountDownLatch latch = redisson.getCountDownLatch("latch1");
-        Assert.assertTrue(latch.trySetCount(1));
+        Assertions.assertTrue(latch.trySetCount(1));
 
         executor.execute(() -> {
             try {
                 Thread.sleep(500);
             } catch (InterruptedException e) {
-                Assert.fail();
+                Assertions.fail();
             }
             latch.countDown();
         });
@@ -31,16 +35,16 @@ public class RedissonCountDownLatchTest extends BaseTest {
 
         executor.execute(() -> {
             try {
-                Assert.assertEquals(1, latch.getCount());
+                Assertions.assertEquals(1, latch.getCount());
                 boolean res = latch.await(550, TimeUnit.MILLISECONDS);
-                Assert.assertTrue(res);
+                Assertions.assertTrue(res);
             } catch (InterruptedException e) {
-                Assert.fail();
+                Assertions.fail();
             }
         });
 
         executor.shutdown();
-        Assert.assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS));
+        Assertions.assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS));
 
     }
 
@@ -49,13 +53,13 @@ public class RedissonCountDownLatchTest extends BaseTest {
         ExecutorService executor = Executors.newFixedThreadPool(2);
 
         final RCountDownLatch latch = redisson.getCountDownLatch("latch1");
-        Assert.assertTrue(latch.trySetCount(1));
+        Assertions.assertTrue(latch.trySetCount(1));
 
         executor.execute(() -> {
             try {
                 Thread.sleep(1000);
             } catch (InterruptedException e) {
-                Assert.fail();
+                Assertions.fail();
             }
             latch.countDown();
         });
@@ -63,41 +67,75 @@ public class RedissonCountDownLatchTest extends BaseTest {
 
         executor.execute(() -> {
             try {
-                Assert.assertEquals(1, latch.getCount());
+                Assertions.assertEquals(1, latch.getCount());
                 boolean res = latch.await(500, TimeUnit.MILLISECONDS);
-                Assert.assertFalse(res);
+                Assertions.assertFalse(res);
             } catch (InterruptedException e) {
-                Assert.fail();
+                Assertions.fail();
             }
         });
 
         executor.shutdown();
-        Assert.assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS));
+        Assertions.assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS));
+    }
+
+    @Test
+    public void testMultiAwait() throws InterruptedException {
+        RCountDownLatch latch = redisson.getCountDownLatch("latch");
+        latch.trySetCount(5);
+        AtomicInteger counter = new AtomicInteger();
+        for (int i = 0; i < 5; i++) {
+            Thread t = new Thread() {
+                @Override
+                public void run() {
+                    RCountDownLatch latch2 = redisson.getCountDownLatch("latch");
+                    latch2.awaitAsync(10L, TimeUnit.SECONDS).thenAccept(r -> {
+                        if (r) {
+                            counter.incrementAndGet();
+                        }
+                    });
+                }
+            };
+            t.start();
+        }
+
+        ScheduledExecutorService ee = Executors.newScheduledThreadPool(1);
+        for (int i = 0; i < 5; i++) {
+            ee.schedule(() -> {
+                RCountDownLatch latch2 = redisson.getCountDownLatch("latch");
+                latch2.countDown();
+            }, 1, TimeUnit.SECONDS);
+        }
+
+        Awaitility.await().atMost(Duration.ofSeconds(7)).until(() -> {
+            return latch.getCount() == 0;
+        });
+        assertThat(counter.get()).isEqualTo(5);
     }
 
     @Test
     public void testCountDown() throws InterruptedException {
         RCountDownLatch latch = redisson.getCountDownLatch("latch");
         latch.trySetCount(2);
-        Assert.assertEquals(2, latch.getCount());
+        Assertions.assertEquals(2, latch.getCount());
         latch.countDown();
-        Assert.assertEquals(1, latch.getCount());
+        Assertions.assertEquals(1, latch.getCount());
         latch.countDown();
-        Assert.assertEquals(0, latch.getCount());
+        Assertions.assertEquals(0, latch.getCount());
         latch.await();
         latch.countDown();
-        Assert.assertEquals(0, latch.getCount());
+        Assertions.assertEquals(0, latch.getCount());
         latch.await();
         latch.countDown();
-        Assert.assertEquals(0, latch.getCount());
+        Assertions.assertEquals(0, latch.getCount());
         latch.await();
 
         RCountDownLatch latch1 = redisson.getCountDownLatch("latch1");
         latch1.trySetCount(1);
         latch1.countDown();
-        Assert.assertEquals(0, latch.getCount());
+        Assertions.assertEquals(0, latch.getCount());
         latch1.countDown();
-        Assert.assertEquals(0, latch.getCount());
+        Assertions.assertEquals(0, latch.getCount());
         latch1.await();
 
         RCountDownLatch latch2 = redisson.getCountDownLatch("latch2");
@@ -107,13 +145,13 @@ public class RedissonCountDownLatchTest extends BaseTest {
         latch2.await();
 
         RCountDownLatch latch3 = redisson.getCountDownLatch("latch3");
-        Assert.assertEquals(0, latch.getCount());
+        Assertions.assertEquals(0, latch.getCount());
         latch3.await();
 
         RCountDownLatch latch4 = redisson.getCountDownLatch("latch4");
-        Assert.assertEquals(0, latch.getCount());
+        Assertions.assertEquals(0, latch.getCount());
         latch4.countDown();
-        Assert.assertEquals(0, latch.getCount());
+        Assertions.assertEquals(0, latch.getCount());
         latch4.await();
     }
 
@@ -121,13 +159,13 @@ public class RedissonCountDownLatchTest extends BaseTest {
     public void testDelete() throws Exception {
         RCountDownLatch latch = redisson.getCountDownLatch("latch");
         latch.trySetCount(1);
-        Assert.assertTrue(latch.delete());
+        Assertions.assertTrue(latch.delete());
     }
 
     @Test
     public void testDeleteFailed() throws Exception {
         RCountDownLatch latch = redisson.getCountDownLatch("latch");
-        Assert.assertFalse(latch.delete());
+        Assertions.assertFalse(latch.delete());
     }
 
     @Test

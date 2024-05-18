@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,28 +15,176 @@
  */
 package org.redisson.api;
 
-import java.util.Iterator;
-import java.util.Set;
-
 import org.redisson.api.mapreduce.RCollectionMapReduce;
 
+import java.util.Collection;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Stream;
+
 /**
- * Distributed and concurrent implementation of {@link java.util.Set}
+ * Redis based implementation of {@link java.util.Set}
  *
  * @author Nikita Koksharov
  *
- * @param <V> value
+ * @param <V> type of value
  */
 public interface RSet<V> extends Set<V>, RExpirable, RSetAsync<V>, RSortable<Set<V>> {
 
     /**
-     * Returns values iterator matches <code>pattern</code>. 
+     * Adds all elements contained in the specified collection.
+     * Returns number of added elements.
+     *
+     * @param c - collection of elements to add
+     * @return number of added elements
+     */
+    int addAllCounted(Collection<? extends V> c);
+
+    /**
+     * Removes all elements contained in the specified collection.
+     * Returns number of removed elements.
+     *
+     * @param c - collection of elements to add
+     * @return number of removed elements
+     */
+    int removeAllCounted(Collection<? extends V> c);
+
+    /**
+     * Returns <code>RCountDownLatch</code> instance associated with <code>value</code>
      * 
-     * @param pattern for values
+     * @param value - set value
+     * @return RCountDownLatch object
+     */
+    RCountDownLatch getCountDownLatch(V value);
+    
+    /**
+     * Returns <code>RPermitExpirableSemaphore</code> instance associated with <code>value</code>
+     * 
+     * @param value - set value
+     * @return RPermitExpirableSemaphore object
+     */
+    RPermitExpirableSemaphore getPermitExpirableSemaphore(V value);
+
+    /**
+     * Returns <code>RSemaphore</code> instance associated with <code>value</code>
+     * 
+     * @param value - set value
+     * @return RSemaphore object
+     */
+    RSemaphore getSemaphore(V value);
+    
+    /**
+     * Returns <code>RLock</code> instance associated with <code>value</code>
+     * 
+     * @param value - set value
+     * @return RLock object
+     */
+    RLock getFairLock(V value);
+    
+    /**
+     * Returns <code>RReadWriteLock</code> instance associated with <code>value</code>
+     * 
+     * @param value - set value
+     * @return RReadWriteLock object
+     */
+    RReadWriteLock getReadWriteLock(V value);
+    
+    /**
+     * Returns lock instance associated with <code>value</code>
+     * 
+     * @param value - set value
+     * @return RLock object
+     */
+    RLock getLock(V value);
+    
+    /**
+     * Returns stream of elements fetches elements in a batch.
+     * Batch size is defined by <code>count</code> param.
+     * 
+     * @param count - size of elements batch
+     * @return stream of elements
+     */
+    Stream<V> stream(int count);
+    
+    /**
+     * Returns stream of elements fetches elements in a batch.
+     * Batch size is defined by <code>count</code> param.
+     * If pattern is not null then only elements match this pattern are loaded.
+     * 
+     * @param pattern - search pattern
+     * @param count - size of elements batch
+     * @return stream of elements
+     */
+    Stream<V> stream(String pattern, int count);
+    
+    /**
+     * Returns stream of elements.
+     * If pattern is not null then only elements match this pattern are loaded.
+     * 
+     * @param pattern - search pattern
+     * @return stream of elements
+     */
+    Stream<V> stream(String pattern);
+    
+    /**
+     * Returns elements iterator fetches elements in a batch.
+     * Batch size is defined by <code>count</code> param.
+     * 
+     * @param count - size of elements batch
+     * @return iterator
+     */
+    Iterator<V> iterator(int count);
+    
+    /**
+     * Returns elements iterator fetches elements in a batch.
+     * Batch size is defined by <code>count</code> param.
+     * If pattern is not null then only elements match this pattern are loaded.
+     * 
+     * @param pattern - search pattern
+     * @param count - size of elements batch
+     * @return iterator
+     */
+    Iterator<V> iterator(String pattern, int count);
+    
+    /**
+     * Returns elements iterator.
+     * If <code>pattern</code> is not null then only elements match this pattern are loaded.
+     * 
+     * @param pattern - search pattern
      * @return iterator
      */
     Iterator<V> iterator(String pattern);
-    
+
+    /**
+     * Returns element iterator that can be shared across multiple applications.
+     * Creating multiple iterators on the same object with this method will result in a single shared iterator.
+     * See {@linkplain RSet#distributedIterator(String, String, int)} for creating different iterators.
+     * @param count batch size
+     * @return shared elements iterator
+     */
+    Iterator<V> distributedIterator(int count);
+
+    /**
+     * Returns iterator over elements that match specified pattern. Iterator can be shared across multiple applications.
+     * Creating multiple iterators on the same object with this method will result in a single shared iterator.
+     * See {@linkplain RSet#distributedIterator(String, String, int)} for creating different iterators.
+     * @param pattern element pattern
+     * @return shared elements iterator
+     */
+    Iterator<V> distributedIterator(String pattern);
+
+    /**
+     * Returns iterator over elements that match specified pattern. Iterator can be shared across multiple applications.
+     * Creating multiple iterators on the same object with this method will result in a single shared iterator.
+     * Iterator name must be resolved to the same hash slot as set name.
+     * @param pattern element pattern
+     * @param count batch size
+     * @param iteratorName redis object name to which cursor will be saved
+     * @return shared elements iterator
+     */
+    Iterator<V> distributedIterator(String iteratorName, String pattern, int count);
+
     /**
      * Returns <code>RMapReduce</code> object associated with this object
      * 
@@ -47,27 +195,35 @@ public interface RSet<V> extends Set<V>, RExpirable, RSetAsync<V>, RSortable<Set
     <KOut, VOut> RCollectionMapReduce<V, KOut, VOut> mapReduce();
     
     /**
-     * Removes and returns random elements from set
+     * Removes and returns random elements limited by <code>amount</code>
      * 
-     * @param amount of random values
-     * @return random values
+     * @param amount of random elements
+     * @return random elements
      */
     Set<V> removeRandom(int amount);
     
     /**
-     * Removes and returns random element from set
+     * Removes and returns random element
      *
-     * @return value
+     * @return random element
      */
     V removeRandom();
 
     /**
-     * Returns random element from set
+     * Returns random element
      *
-     * @return value
+     * @return random element
      */
     V random();
 
+    /**
+     * Returns random elements from set limited by <code>count</code>
+     *
+     * @param count - values amount to return
+     * @return random elements
+     */
+    Set<V> random(int count);
+    
     /**
      * Move a member from this set to the given destination set in.
      *
@@ -138,5 +294,61 @@ public interface RSet<V> extends Set<V>, RExpirable, RSetAsync<V>, RSortable<Set
      * @return values
      */
     Set<V> readIntersection(String... names);
+
+    /**
+     * Counts elements of set as a result of sets intersection with current set.
+     * <p>
+     * Requires <b>Redis 7.0.0 and higher.</b>
+     *
+     * @param names - name of sets
+     * @return amount of elements
+     */
+    Integer countIntersection(String... names);
+
+    /**
+     * Counts elements of set as a result of sets intersection with current set.
+     * <p>
+     * Requires <b>Redis 7.0.0 and higher.</b>
+     *
+     * @param names - name of sets
+     * @param limit - sets intersection limit
+     * @return amount of elements
+     */
+    Integer countIntersection(int limit, String... names);
+
+    /**
+     * Tries to add elements only if none of them in set.
+     *
+     * @param values - values to add
+     * @return <code>true</code> if elements successfully added,
+     *          otherwise <code>false</code>.
+     */
+    boolean tryAdd(V... values);
+
+    /**
+     * Check if each element is contained in the specified collection.
+     * Returns contained elements.
+     * <p>
+     * Requires <b>Redis 6.2.0 and higher.</b>
+     *
+     * @param c - collection to check
+     * @return contained elements
+     */
+    List<V> containsEach(Collection<V> c);
+
+    /**
+     * Adds object event listener
+     *
+     * @see org.redisson.api.listener.TrackingListener
+     * @see org.redisson.api.listener.SetAddListener
+     * @see org.redisson.api.listener.SetRemoveListener
+     * @see org.redisson.api.listener.SetRemoveRandomListener
+     * @see org.redisson.api.ExpiredObjectListener
+     * @see org.redisson.api.DeletedObjectListener
+     *
+     * @param listener - object event listener
+     * @return listener id
+     */
+    int addListener(ObjectListener listener);
 
 }

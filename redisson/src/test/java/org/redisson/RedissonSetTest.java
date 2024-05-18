@@ -1,26 +1,29 @@
 package org.redisson;
 
-import static org.assertj.core.api.Assertions.assertThat;
-
-import java.io.Serializable;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.Set;
-import java.util.concurrent.ExecutionException;
-
-import org.junit.Assert;
-import org.junit.Test;
+import io.netty.util.ResourceLeakDetector;
+import mockit.Invocation;
+import mockit.Mock;
+import mockit.MockUp;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
 import org.redisson.api.RFuture;
 import org.redisson.api.RList;
 import org.redisson.api.RSet;
+import org.redisson.api.RTransaction;
 import org.redisson.api.SortOrder;
+import org.redisson.api.TransactionOptions;
 import org.redisson.client.codec.IntegerCodec;
 import org.redisson.client.codec.StringCodec;
 
-public class RedissonSetTest extends BaseTest {
+import java.io.Serializable;
+import java.util.*;
+import java.util.concurrent.ExecutionException;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+public class RedissonSetTest extends RedisDockerTest {
 
     public static class SimpleBean implements Serializable {
 
@@ -34,6 +37,64 @@ public class RedissonSetTest extends BaseTest {
             this.lng = lng;
         }
 
+    }
+
+    @Test
+    public void testContainsEach() {
+        RSet<Integer> set = redisson.getSet("list", IntegerCodec.INSTANCE);
+        set.add(0);
+        set.add(1);
+
+        assertThat(set.containsEach(Collections.emptySet())).isEmpty();
+        assertThat(set.containsEach(Arrays.asList(0, 1)))
+                .hasSize(2)
+                .containsOnly(0, 1);
+
+        assertThat(set.containsEach(Arrays.asList(0, 1, 2)))
+                .hasSize(2)
+                .containsOnly(0, 1);
+
+        assertThat(set.containsEach(Arrays.asList(0, 1, 0, 2)))
+                .hasSize(3)
+                .containsOnly(0, 1, 0);
+
+        assertThat(set.containsEach(Arrays.asList(2, 3, 4)))
+                .hasSize(0);
+    }
+
+    @Test
+    public void testRemoveAllCounted() {
+        RSet<Integer> set = redisson.getSet("list", IntegerCodec.INSTANCE);
+        set.add(0);
+        set.add(1);
+        set.add(2);
+        set.add(3);
+
+        assertThat(set.removeAllCounted(Arrays.asList(1, 2, 3, 4, 5))).isEqualTo(3);
+    }
+
+    @Test
+    public void testTryAdd() {
+        RSet<String> set = redisson.getSet("list", IntegerCodec.INSTANCE);
+        Set<String> names = new HashSet<>();
+        int elements = 200000;
+        for (int i = 0; i < elements; i++) {
+            names.add("name" + i);
+        }
+
+        boolean s = set.tryAdd(names.toArray(new String[]{}));
+        assertThat(s).isTrue();
+        assertThat(set.size()).isEqualTo(elements);
+
+        Set<String> names2 = new HashSet<>();
+        for (int i = elements+1; i < elements + 10000; i++) {
+            names2.add("name" + i);
+        }
+        names2.add("name10");
+
+        boolean r = set.tryAdd(names2.toArray(new String[]{}));
+        assertThat(r).isFalse();
+        assertThat(set.size()).isEqualTo(elements);
     }
 
     @Test
@@ -143,14 +204,128 @@ public class RedissonSetTest extends BaseTest {
         Collection<String> ascSort = list.readSort("test*", Arrays.asList("tester*"), SortOrder.ASC, 1, 2);
         assertThat(ascSort).containsExactly("obj2", "obj3");
     }
-    
+
+    @Test
+    public void testSortOrderAlpha(){
+        RSet<String> set = redisson.getSet("list", StringCodec.INSTANCE);
+        set.add("1");
+        set.add("3");
+        set.add("12");
+
+        assertThat(set.readSortAlpha(SortOrder.ASC))
+                .containsExactly("1", "12", "3");
+        assertThat(set.readSortAlpha(SortOrder.DESC))
+                .containsExactly("3", "12", "1");
+    }
+
+    @Test
+    public void testSortOrderLimitAlpha(){
+        RSet<String> set = redisson.getSet("list", StringCodec.INSTANCE);
+        set.add("1");
+        set.add("3");
+        set.add("12");
+
+        assertThat(set.readSortAlpha(SortOrder.DESC, 0, 2))
+                .containsExactly("3", "12");
+        assertThat(set.readSortAlpha(SortOrder.DESC, 1, 2))
+                .containsExactly("12", "1");
+    }
+
+    @Test
+    public void testSortOrderByPatternAlpha(){
+        RSet<Integer> set = redisson.getSet("list", IntegerCodec.INSTANCE);
+        set.add(1);
+        set.add(2);
+        set.add(3);
+
+        redisson.getBucket("test1", IntegerCodec.INSTANCE).set(12);
+        redisson.getBucket("test2", IntegerCodec.INSTANCE).set(3);
+        redisson.getBucket("test3", IntegerCodec.INSTANCE).set(1);
+
+        Collection<Integer> descSort = set
+                .readSortAlpha("test*", SortOrder.DESC);
+        assertThat(descSort).containsExactly(2, 1, 3);
+
+        Collection<Integer> ascSort = set
+                .readSortAlpha("test*", SortOrder.ASC);
+        assertThat(ascSort).containsExactly(3, 1, 2);
+    }
+
+    @Test
+    public void testSortOrderByPatternAlphaLimit(){
+        RSet<Integer> set = redisson.getSet("list", IntegerCodec.INSTANCE);
+        set.add(1);
+        set.add(2);
+        set.add(3);
+
+        redisson.getBucket("test1", IntegerCodec.INSTANCE).set(12);
+        redisson.getBucket("test2", IntegerCodec.INSTANCE).set(3);
+        redisson.getBucket("test3", IntegerCodec.INSTANCE).set(1);
+
+        Collection<Integer> descSort = set
+                .readSortAlpha("test*", SortOrder.DESC,1, 2);
+        assertThat(descSort).containsExactly(1, 3);
+
+        Collection<Integer> ascSort = set
+                .readSortAlpha("test*", SortOrder.ASC,1, 2);
+        assertThat(ascSort).containsExactly(1, 2);
+    }
+
+    @Test
+    public void testSortOrderByPatternGetAlpha() {
+        RSet<String> set = redisson.getSet("list", StringCodec.INSTANCE);
+        set.add("1");
+        set.add("2");
+        set.add("3");
+
+        redisson.getBucket("test1", IntegerCodec.INSTANCE).set(12);
+        redisson.getBucket("test2", IntegerCodec.INSTANCE).set(3);
+        redisson.getBucket("test3", IntegerCodec.INSTANCE).set(1);
+
+        redisson.getBucket("tester1", StringCodec.INSTANCE).set("obj1");
+        redisson.getBucket("tester2", StringCodec.INSTANCE).set("obj2");
+        redisson.getBucket("tester3", StringCodec.INSTANCE).set("obj3");
+
+        Collection<String> descSort = set
+                .readSortAlpha("test*", Arrays.asList("tester*"), SortOrder.DESC);
+        assertThat(descSort).containsExactly("obj2", "obj1", "obj3");
+
+        Collection<String> ascSort = set
+                .readSortAlpha("test*", Arrays.asList("tester*"), SortOrder.ASC);
+        assertThat(ascSort).containsExactly("obj3", "obj1", "obj2");
+    }
+
+    @Test
+    public void testSortOrderByPatternGetAlphaLimit() {
+        RSet<String> set = redisson.getSet("list", StringCodec.INSTANCE);
+        set.add("1");
+        set.add("2");
+        set.add("3");
+
+        redisson.getBucket("test1", IntegerCodec.INSTANCE).set(12);
+        redisson.getBucket("test2", IntegerCodec.INSTANCE).set(3);
+        redisson.getBucket("test3", IntegerCodec.INSTANCE).set(1);
+
+        redisson.getBucket("tester1", StringCodec.INSTANCE).set("obj1");
+        redisson.getBucket("tester2", StringCodec.INSTANCE).set("obj2");
+        redisson.getBucket("tester3", StringCodec.INSTANCE).set("obj3");
+
+        Collection<String> descSort = set
+                .readSortAlpha("test*", Arrays.asList("tester*"), SortOrder.DESC,1,  2);
+        assertThat(descSort).containsExactly("obj1", "obj3");
+
+        Collection<String> ascSort = set
+                .readSortAlpha("test*", Arrays.asList("tester*"), SortOrder.ASC,1,  2);
+        assertThat(ascSort).containsExactly("obj1", "obj2");
+    }
+
     @Test
     public void testSortTo() {
         RSet<String> list = redisson.getSet("list", IntegerCodec.INSTANCE);
         list.add("1");
         list.add("2");
         list.add("3");
-        
+
         assertThat(list.sortTo("test3", SortOrder.DESC)).isEqualTo(3);
         RList<String> list2 = redisson.getList("test3", StringCodec.INSTANCE);
         assertThat(list2).containsExactly("3", "2", "1");
@@ -227,7 +402,17 @@ public class RedissonSetTest extends BaseTest {
         assertThat(set.removeRandom(4)).isEmpty();
     }
 
-
+    @Test
+    public void testRandomLimited() {
+        RSet<Integer> set = redisson.getSet("simple");
+        for (int i = 0; i < 10; i++) {
+            set.add(i);
+        }
+        
+        assertThat(set.random(3)).containsAnyElementsOf(set.readAll()).hasSize(3);
+    }
+    
+    
     @Test
     public void testRandom() {
         RSet<Integer> set = redisson.getSet("simple");
@@ -247,7 +432,7 @@ public class RedissonSetTest extends BaseTest {
         sb.setLng(1L);
         RSet<SimpleBean> set = redisson.getSet("simple");
         set.add(sb);
-        Assert.assertEquals(sb.getLng(), set.iterator().next().getLng());
+        Assertions.assertEquals(sb.getLng(), set.iterator().next().getLng());
     }
 
     @Test
@@ -258,13 +443,13 @@ public class RedissonSetTest extends BaseTest {
         set.add(sb);
 
         for (Long l : set) {
-            Assert.assertEquals(sb.getClass(), l.getClass());
+            Assertions.assertEquals(sb.getClass(), l.getClass());
         }
 
         Object[] arr = set.toArray();
 
         for (Object o : arr) {
-            Assert.assertEquals(sb.getClass(), o.getClass());
+            Assertions.assertEquals(sb.getClass(), o.getClass());
         }
     }
 
@@ -272,9 +457,9 @@ public class RedissonSetTest extends BaseTest {
     public void testAddAsync() throws InterruptedException, ExecutionException {
         RSet<Integer> set = redisson.getSet("simple");
         RFuture<Boolean> future = set.addAsync(2);
-        Assert.assertTrue(future.get());
+        Assertions.assertTrue(future.get());
 
-        Assert.assertTrue(set.contains(2));
+        Assertions.assertTrue(set.contains(2));
     }
 
     @Test
@@ -284,15 +469,15 @@ public class RedissonSetTest extends BaseTest {
         set.add(3);
         set.add(7);
 
-        Assert.assertTrue(set.removeAsync(1).get());
-        Assert.assertFalse(set.contains(1));
+        Assertions.assertTrue(set.removeAsync(1).get());
+        Assertions.assertFalse(set.contains(1));
         assertThat(set).containsOnly(3, 7);
 
-        Assert.assertFalse(set.removeAsync(1).get());
+        Assertions.assertFalse(set.removeAsync(1).get());
         assertThat(set).containsOnly(3, 7);
 
         set.removeAsync(3).get();
-        Assert.assertFalse(set.contains(3));
+        Assertions.assertFalse(set.contains(3));
         assertThat(set).contains(7);
     }
 
@@ -321,10 +506,10 @@ public class RedissonSetTest extends BaseTest {
             iteration++;
         }
 
-        Assert.assertEquals(4, iteration);
+        Assertions.assertEquals(4, iteration);
 
-        Assert.assertEquals(0, list.size());
-        Assert.assertTrue(list.isEmpty());
+        Assertions.assertEquals(0, list.size());
+        Assertions.assertTrue(list.isEmpty());
     }
 
     @Test
@@ -346,11 +531,11 @@ public class RedissonSetTest extends BaseTest {
         for (Iterator<Long> iterator = set.iterator(); iterator.hasNext();) {
             Long value = iterator.next();
             if (!setCopy.remove(value)) {
-                Assert.fail();
+                Assertions.fail();
             }
         }
 
-        Assert.assertEquals(0, setCopy.size());
+        Assertions.assertEquals(0, setCopy.size());
     }
 
     @Test
@@ -369,13 +554,31 @@ public class RedissonSetTest extends BaseTest {
             set.add(i);
         }
 
-        Assert.assertTrue(set.retainAll(Arrays.asList(1, 2)));
+        Assertions.assertTrue(set.retainAll(Arrays.asList(1, 2)));
         assertThat(set).containsOnly(1, 2);
-        Assert.assertEquals(2, set.size());
+        Assertions.assertEquals(2, set.size());
     }
 
     @Test
-    public void testIteratorRemoveHighVolume() throws InterruptedException {
+    public void testClusteredIterator() {
+        testInCluster(redisson -> {
+            int size = 10000;
+            RSet<String> set = redisson.getSet("{test");
+            for (int i = 0; i < size; i++) {
+                set.add("" + i);
+            }
+
+            Set<String> keys = new HashSet<>();
+            for (String key : set) {
+                keys.add(key);
+            }
+
+            assertThat(keys).hasSize(size);
+        });
+    }
+    
+    @Test
+    public void testIteratorRemoveHighVolume() {
         Set<Integer> set = redisson.getSet("set") /*new HashSet<Integer>()*/;
         for (int i = 0; i < 10000; i++) {
             set.add(i);
@@ -388,8 +591,8 @@ public class RedissonSetTest extends BaseTest {
             iterator.remove();
             cnt++;
         }
-        Assert.assertEquals(0, set.size());
-        Assert.assertEquals(10000, cnt);
+        Assertions.assertEquals(0, set.size());
+        Assertions.assertEquals(10000, cnt);
     }
 
     @Test
@@ -399,9 +602,9 @@ public class RedissonSetTest extends BaseTest {
             set.add(i);
         }
 
-        Assert.assertTrue(set.containsAll(Collections.emptyList()));
-        Assert.assertTrue(set.containsAll(Arrays.asList(30, 11)));
-        Assert.assertFalse(set.containsAll(Arrays.asList(30, 711, 11)));
+        Assertions.assertTrue(set.containsAll(Collections.emptyList()));
+        Assertions.assertTrue(set.containsAll(Arrays.asList(30, 11)));
+        Assertions.assertFalse(set.containsAll(Arrays.asList(30, 711, 11)));
     }
 
     @Test
@@ -429,9 +632,9 @@ public class RedissonSetTest extends BaseTest {
         set.add(new TestObject("3", "4"));
         set.add(new TestObject("5", "6"));
 
-        Assert.assertTrue(set.contains(new TestObject("2", "3")));
-        Assert.assertTrue(set.contains(new TestObject("1", "2")));
-        Assert.assertFalse(set.contains(new TestObject("1", "9")));
+        Assertions.assertTrue(set.contains(new TestObject("2", "3")));
+        Assertions.assertTrue(set.contains(new TestObject("1", "2")));
+        Assertions.assertFalse(set.contains(new TestObject("1", "9")));
     }
 
     @Test
@@ -444,7 +647,7 @@ public class RedissonSetTest extends BaseTest {
         set.add(new TestObject("3", "4"));
         set.add(new TestObject("5", "6"));
 
-        Assert.assertEquals(4, set.size());
+        Assertions.assertEquals(4, set.size());
     }
 
     @Test
@@ -458,7 +661,7 @@ public class RedissonSetTest extends BaseTest {
         set.add(5);
         set.add(5);
 
-        Assert.assertEquals(5, set.size());
+        Assertions.assertEquals(5, set.size());
     }
 
 
@@ -471,8 +674,8 @@ public class RedissonSetTest extends BaseTest {
         set.add(4);
         set.add(5);
 
-        Assert.assertTrue(set.retainAll(Collections.<Integer>emptyList()));
-        Assert.assertEquals(0, set.size());
+        Assertions.assertTrue(set.retainAll(Collections.<Integer>emptyList()));
+        Assertions.assertEquals(0, set.size());
     }
 
     @Test
@@ -481,7 +684,7 @@ public class RedissonSetTest extends BaseTest {
         set.add(1);
         set.add(2);
 
-        Assert.assertFalse(set.retainAll(Arrays.asList(1, 2))); // nothing changed
+        Assertions.assertFalse(set.retainAll(Arrays.asList(1, 2))); // nothing changed
         assertThat(set).containsOnly(1, 2);
     }
 
@@ -616,10 +819,10 @@ public class RedissonSetTest extends BaseTest {
 
         set.add(1);
 
-        Assert.assertFalse(set.move("otherSet", 2));
+        Assertions.assertFalse(set.move("otherSet", 2));
 
-        Assert.assertEquals(1, set.size());
-        Assert.assertEquals(0, otherSet.size());
+        Assertions.assertEquals(1, set.size());
+        Assertions.assertEquals(0, otherSet.size());
     }
     
     
@@ -632,8 +835,8 @@ public class RedissonSetTest extends BaseTest {
         list.add(4);
         list.add(5);
 
-        Assert.assertFalse(list.removeAll(Collections.emptyList()));
-        Assert.assertFalse(Arrays.asList(1).removeAll(Collections.emptyList()));
+        Assertions.assertFalse(list.removeAll(Collections.emptyList()));
+        Assertions.assertFalse(Arrays.asList(1).removeAll(Collections.emptyList()));
     }
 
     @Test
@@ -645,17 +848,80 @@ public class RedissonSetTest extends BaseTest {
         list.add(4);
         list.add(5);
 
-        Assert.assertFalse(list.removeAll(Collections.emptyList()));
-        Assert.assertTrue(list.removeAll(Arrays.asList(3, 2, 10, 6)));
+        Assertions.assertFalse(list.removeAll(Collections.emptyList()));
+        Assertions.assertTrue(list.removeAll(Arrays.asList(3, 2, 10, 6)));
 
         assertThat(list).containsExactlyInAnyOrder(1, 4, 5);
 
-        Assert.assertTrue(list.removeAll(Arrays.asList(4)));
+        Assertions.assertTrue(list.removeAll(Arrays.asList(4)));
 
-        assertThat(list).containsExactly(1, 5);
+        assertThat(list).containsExactlyInAnyOrder(1, 5);
 
-        Assert.assertTrue(list.removeAll(Arrays.asList(1, 5, 1, 5)));
+        Assertions.assertTrue(list.removeAll(Arrays.asList(1, 5, 1, 5)));
 
-        Assert.assertTrue(list.isEmpty());
+        Assertions.assertTrue(list.isEmpty());
+    }
+
+    @Test
+    public void testDistributedIterator() {
+        RSet<String> set = redisson.getSet("set", StringCodec.INSTANCE);
+
+        // populate set with elements
+        List<String> stringsOne = IntStream.range(0, 128).mapToObj(i -> "one-" + i).collect(Collectors.toList());
+        List<String> stringsTwo = IntStream.range(0, 128).mapToObj(i -> "two-" + i).collect(Collectors.toList());
+        set.addAll(stringsOne);
+        set.addAll(stringsTwo);
+
+        Iterator<String> stringIterator = set.distributedIterator("iterator_{set}", "one*", 10);
+
+        // read some elements using iterator
+        List<String> strings = new ArrayList<>();
+        for (int i = 0; i < 64; i++) {
+            if (stringIterator.hasNext()) {
+                strings.add(stringIterator.next());
+            }
+        }
+
+        // create another iterator instance using the same name
+        RSet<String> set2 = redisson.getSet("set", StringCodec.INSTANCE);
+        Iterator<String> stringIterator2 = set2.distributedIterator("iterator_{set}", "one*", 10);
+
+        Assertions.assertTrue(stringIterator2.hasNext());
+
+        // read all remaining elements
+        stringIterator2.forEachRemaining(strings::add);
+        stringIterator.forEachRemaining(strings::add);
+
+        assertThat(strings).containsAll(stringsOne);
+        assertThat(strings).hasSize(stringsOne.size());
+    }
+
+    @Test
+    public void testAddAndContainsInTransactionShouldNotShowResourceLeak() {
+
+        new MockUp<ResourceLeakDetector<?>>() {
+            @Mock
+            void reportTracedLeak(Invocation invocation, String resourceType, String records) {
+                invocation.proceed();
+                Assertions.fail();
+            }
+
+            @Mock
+            void reportUntracedLeak(Invocation invocation, String resourceType) {
+                invocation.proceed();
+                Assertions.fail();
+            }
+        };
+
+        RTransaction tx = redisson.createTransaction(TransactionOptions.defaults());
+        RSet<Integer> testSet = tx.getSet("testSet");
+        for (int index = 0; index < 1000; index++) {
+            testSet.add(index);
+            if (testSet.contains(index)) {
+                // do nothing
+            }
+        }
+
+        tx.commit();
     }
 }

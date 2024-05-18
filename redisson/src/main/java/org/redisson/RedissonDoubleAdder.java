@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,12 +15,13 @@
  */
 package org.redisson;
 
-import org.redisson.api.RAtomicDouble;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.DoubleAdder;
+
 import org.redisson.api.RDoubleAdder;
 import org.redisson.api.RFuture;
 import org.redisson.api.RedissonClient;
 import org.redisson.command.CommandAsyncExecutor;
-import org.redisson.misc.DoubleAdder;
 
 /**
  * 
@@ -30,12 +31,12 @@ import org.redisson.misc.DoubleAdder;
 public class RedissonDoubleAdder extends RedissonBaseAdder<Double> implements RDoubleAdder {
 
     private final DoubleAdder counter = new DoubleAdder();
-    private final RAtomicDouble atomicDouble;
+    private final RedissonClient redisson;
     
     public RedissonDoubleAdder(CommandAsyncExecutor connectionManager, String name, RedissonClient redisson) {
         super(connectionManager, name, redisson);
         
-        atomicDouble = redisson.getAtomicDouble(getName());
+        this.redisson = redisson;
     }
 
     @Override
@@ -44,13 +45,13 @@ public class RedissonDoubleAdder extends RedissonBaseAdder<Double> implements RD
     }
     
     @Override
-    protected RFuture<Double> addAndGetAsync() {
-        return atomicDouble.getAndAddAsync(counter.sum());
+    protected RFuture<Double> addAndGetAsync(String id) {
+        return redisson.getAtomicDouble(getCounterName(id)).getAndAddAsync(counter.sum());
     }
     
     @Override
-    protected RFuture<Double> getAndDeleteAsync() {
-        return atomicDouble.getAndDeleteAsync();
+    protected RFuture<Double> getAndDeleteAsync(String id) {
+        return redisson.getAtomicDouble(getCounterName(id)).getAndDeleteAsync();
     }
 
     @Override
@@ -70,7 +71,7 @@ public class RedissonDoubleAdder extends RedissonBaseAdder<Double> implements RD
     
     @Override
     public double sum() {
-        return get(sumAsync());
+        return get(sumAsync(60, TimeUnit.SECONDS));
     }
 
 }

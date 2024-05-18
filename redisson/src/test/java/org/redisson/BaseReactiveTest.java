@@ -1,97 +1,47 @@
 package org.redisson;
 
-import java.io.IOException;
-import java.util.Iterator;
-
-import org.junit.After;
-import org.junit.AfterClass;
-import org.junit.Before;
-import org.junit.BeforeClass;
+import org.junit.jupiter.api.BeforeAll;
 import org.reactivestreams.Publisher;
 import org.redisson.api.RCollectionReactive;
 import org.redisson.api.RScoredSortedSetReactive;
 import org.redisson.api.RedissonReactiveClient;
-import org.redisson.config.Config;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
-import reactor.rx.Promise;
-import reactor.rx.Streams;
+import java.io.IOException;
+import java.util.Iterator;
 
-public abstract class BaseReactiveTest {
+public abstract class BaseReactiveTest extends RedisDockerTest {
 
-    protected RedissonReactiveClient redisson;
-    protected static RedissonReactiveClient defaultRedisson;
+    protected static RedissonReactiveClient redisson;
 
-    @BeforeClass
-    public static void beforeClass() throws IOException, InterruptedException {
-        if (!RedissonRuntimeEnvironment.isTravis) {
-            RedisRunner.startDefaultRedisServerInstance();
-            defaultRedisson = createInstance();
-        }
-    }
-
-    @AfterClass
-    public static void afterClass() throws IOException, InterruptedException {
-        if (!RedissonRuntimeEnvironment.isTravis) {
-            RedisRunner.shutDownDefaultRedisServerInstance();
-            defaultRedisson.shutdown();
-        }
-    }
-
-    @Before
-    public void before() throws IOException, InterruptedException {
-        if (RedissonRuntimeEnvironment.isTravis) {
-            RedisRunner.startDefaultRedisServerInstance();
-            redisson = createInstance();
-        } else {
-            if (redisson == null) {
-                redisson = defaultRedisson;
-            }
-            sync(redisson.getKeys().flushall());
-        }
-    }
-
-    @After
-    public void after() throws InterruptedException {
-        if (RedissonRuntimeEnvironment.isTravis) {
-            redisson.shutdown();
-            RedisRunner.shutDownDefaultRedisServerInstance();
-        }
+    @BeforeAll
+    public static void beforeClass() {
+        redisson = RedisDockerTest.redisson.reactive();
     }
 
     public static <V> Iterable<V> sync(RScoredSortedSetReactive<V> list) {
-        return Streams.create(list.iterator()).toList().poll();
+        return toIterable(list.iterator());
     }
 
     public static <V> Iterable<V> sync(RCollectionReactive<V> list) {
-        return Streams.create(list.iterator()).toList().poll();
+        return toIterable(list.iterator());
     }
 
     public static <V> Iterator<V> toIterator(Publisher<V> pub) {
-        return Streams.create(pub).toList().poll().iterator();
+        return Flux.from(pub).toIterable().iterator();
     }
 
     public static <V> Iterable<V> toIterable(Publisher<V> pub) {
-        return Streams.create(pub).toList().poll();
+        return Flux.from(pub).toIterable();
     }
 
-    public static <V> V sync(Publisher<V> ob) {
-        Promise<V> promise;
-        if (Promise.class.isAssignableFrom(ob.getClass())) {
-            promise = (Promise<V>) ob;
-        } else {
-            promise = Streams.wrap(ob).next();
-        }
-
-        V val = promise.poll();
-        if (promise.isError()) {
-            throw new RuntimeException(promise.reason());
-        }
-        return val;
+    public static <V> V sync(Mono<V> mono) {
+        return mono.block();
     }
-
-    public static RedissonReactiveClient createInstance() {
-        Config config = BaseTest.createConfig();
-        return Redisson.createReactive(config);
+    
+    public static <V> V sync(Flux<V> flux) {
+        return flux.single().block();
     }
 
 }

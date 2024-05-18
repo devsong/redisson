@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,14 +15,19 @@
  */
 package org.redisson;
 
-import org.redisson.misc.RPromise;
+import java.util.concurrent.CompletableFuture;
 
+/**
+ *
+ * Nikita Koksharov
+ *
+ */
 public interface PubSubEntry<E> {
 
-    void aquire();
+    void acquire();
 
     int release();
 
-    RPromise<E> getPromise();
+    CompletableFuture<E> getPromise();
 
 }

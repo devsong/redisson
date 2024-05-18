@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,10 @@
  */
 package org.redisson.api;
 
+import java.util.Collection;
+import java.util.Map;
+import java.util.Set;
+
 /**
  * Map object with local entry cache support.
  * <p>
@@ -26,15 +30,24 @@ package org.redisson.api;
  * @param <K> map key
  * @param <V> map value
  */
-public interface RLocalCachedMap<K, V> extends RMap<K, V>, RDestroyable {
+public interface RLocalCachedMap<K, V> extends RMap<K, V> {
     
     /**
-     * Pre-warm the cached values.  Not guaranteed to load ALL values, but statistically
-     * will preload approximately all (all if no concurrent mutating activity)
-     * Intended for use with no-eviction caches where entire maps are locally cached
+     * Pre-warm the cached entries. Not guaranteed to load ALL values, but statistically
+     * will preload approximately all (all if no concurrent mutating activity).
+     * Entries are loaded in a batch with size of 10 elements.
      */
     void preloadCache();
-    
+
+    /**
+     * Pre-warm the cached entries. Not guaranteed to load ALL values, but statistically
+     * will preload approximately all (all if no concurrent mutating activity)
+     * Entries are loaded in a batch. Batch size is defined by <code>count</code> param.
+     *
+     * @param count - size of batch
+     */
+    void preloadCache(int count);
+
     /**
      * Clears local cache across all instances
      * 
@@ -46,4 +59,45 @@ public interface RLocalCachedMap<K, V> extends RMap<K, V>, RDestroyable {
      * Clears local cache across all instances
      */
     void clearLocalCache();
+    
+    /**
+     * Returns all keys stored in local cache
+     *
+     * @return keys
+     */
+    Set<K> cachedKeySet();
+
+    /**
+     * Returns all values stored in local cache
+     *
+     * @return values
+     */
+    Collection<V> cachedValues();
+
+    /**
+     * Returns all map entries stored in local cache
+     *
+     * @return entries
+     */
+    Set<Entry<K, V>> cachedEntrySet();
+
+    /**
+     * Returns state of local cache
+     *
+     * @return map
+     */
+    Map<K, V> getCachedMap();
+
+    /**
+     * Adds local cache event listener
+     *
+     * @see org.redisson.api.listener.LocalCacheUpdateListener
+     * @see org.redisson.api.listener.LocalCacheInvalidateListener
+     *
+     * @param listener - local cache event listener
+     * @return listener id
+     */
+    @Override
+    int addListener(ObjectListener listener);
+
 }

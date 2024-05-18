@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,44 +15,25 @@
  */
 package org.redisson.executor;
 
-import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
-
 import org.redisson.api.RExecutorBatchFuture;
 import org.redisson.api.RExecutorFuture;
-import org.redisson.misc.RedissonPromise;
+import org.redisson.misc.CompletableFutureWrapper;
 
-import io.netty.util.concurrent.Future;
-import io.netty.util.concurrent.FutureListener;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * 
  * @author Nikita Koksharov
  *
  */
-public class RedissonExecutorBatchFuture extends RedissonPromise<Void> implements RExecutorBatchFuture {
+public class RedissonExecutorBatchFuture extends CompletableFutureWrapper<Void> implements RExecutorBatchFuture {
 
-    private List<RExecutorFuture<?>> futures;
+    private final List<RExecutorFuture<?>> futures;
 
-    public RedissonExecutorBatchFuture(List<RExecutorFuture<?>> futures) {
+    public RedissonExecutorBatchFuture(CompletableFuture<Void> future, List<RExecutorFuture<?>> futures) {
+        super(future);
         this.futures = futures;
-        
-        final AtomicInteger counter = new AtomicInteger(futures.size());
-        for (RExecutorFuture<?> future : futures) {
-            future.addListener(new FutureListener<Object>() {
-                @Override
-                public void operationComplete(Future<Object> future) throws Exception {
-                    if (!future.isSuccess()) {
-                        RedissonExecutorBatchFuture.this.tryFailure(future.cause());
-                        return;
-                    }
-                    
-                    if (counter.decrementAndGet() == 0) {
-                        RedissonExecutorBatchFuture.this.trySuccess(null);
-                    }
-                }
-            });
-        }
     }
     
     @Override

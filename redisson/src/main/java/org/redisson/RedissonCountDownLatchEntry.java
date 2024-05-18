@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,23 +15,26 @@
  */
 package org.redisson;
 
-import org.redisson.misc.RPromise;
 import org.redisson.misc.ReclosableLatch;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 public class RedissonCountDownLatchEntry implements PubSubEntry<RedissonCountDownLatchEntry> {
 
     private int counter;
 
     private final ReclosableLatch latch;
-    private final RPromise<RedissonCountDownLatchEntry> promise;
+    private final CompletableFuture<RedissonCountDownLatchEntry> promise;
+    private final ConcurrentLinkedQueue<Runnable> listeners = new ConcurrentLinkedQueue<>();
 
-    public RedissonCountDownLatchEntry(RPromise<RedissonCountDownLatchEntry> promise) {
+    public RedissonCountDownLatchEntry(CompletableFuture<RedissonCountDownLatchEntry> promise) {
         super();
         this.latch = new ReclosableLatch();
         this.promise = promise;
     }
 
-    public void aquire() {
+    public void acquire() {
         counter++;
     }
 
@@ -39,8 +42,20 @@ public class RedissonCountDownLatchEntry implements PubSubEntry<RedissonCountDow
         return --counter;
     }
 
-    public RPromise<RedissonCountDownLatchEntry> getPromise() {
+    public CompletableFuture<RedissonCountDownLatchEntry> getPromise() {
         return promise;
+    }
+
+    public void addListener(Runnable listener) {
+        listeners.add(listener);
+    }
+
+    public boolean removeListener(Runnable listener) {
+        return listeners.remove(listener);
+    }
+
+    public ConcurrentLinkedQueue<Runnable> getListeners() {
+        return listeners;
     }
 
     public ReclosableLatch getLatch() {

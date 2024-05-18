@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,12 +15,26 @@
  */
 package org.redisson.client.protocol.convertor;
 
-public class DoubleReplayConvertor extends SingleConvertor<Double> {
+/**
+ * 
+ * @author Nikita Koksharov
+ *
+ */
+public class DoubleReplayConvertor implements Convertor<Double> {
+
+    private Double nullValue;
+
+    public DoubleReplayConvertor() {
+    }
+
+    public DoubleReplayConvertor(Double nullValue) {
+        this.nullValue = nullValue;
+    }
 
     @Override
     public Double convert(Object obj) {
         if (obj == null || obj.toString().isEmpty()) {
-            return null;
+            return nullValue;
         }
         return Double.valueOf(obj.toString());
     }

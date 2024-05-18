@@ -7,11 +7,11 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import org.junit.Assert;
-import org.junit.Test;
-
 import io.netty.channel.nio.NioEventLoopGroup;
 
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.Test;
 import org.redisson.RedisRunner.RedisProcess;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
@@ -20,10 +20,26 @@ import org.redisson.config.Config;
 import static org.awaitility.Awaitility.await;
 import static org.assertj.core.api.Assertions.assertThat;
 
+@Disabled
+@Deprecated
 public class RedissonRedLockTest {
 
     @Test
-    public void testLockLeasetime() throws IOException, InterruptedException {
+    public void testLockLeasetimeWithMilliSeconds() throws IOException, InterruptedException {
+        testLockLeasetime(2000, TimeUnit.MILLISECONDS);
+    }
+
+    @Test
+    public void testLockLeasetimeWithSeconds() throws IOException, InterruptedException {
+        testLockLeasetime(2, TimeUnit.SECONDS);
+    }
+
+    @Test
+    public void testLockLeasetimeWithMinutes() throws IOException, InterruptedException {
+        testLockLeasetime(1, TimeUnit.MINUTES);
+    }
+
+    private void testLockLeasetime(final long leaseTime, final TimeUnit unit) throws IOException, InterruptedException {
         RedisProcess redis1 = redisTestMultilockInstance();
         RedisProcess redis2 = redisTestMultilockInstance();
         
@@ -47,7 +63,7 @@ public class RedissonRedLockTest {
             executor.submit(() -> {
                 for (int j = 0; j < 5; j++) {
                     try {
-                        lock.lock(2, TimeUnit.SECONDS);
+                        lock.lock(leaseTime, unit);
                         int nextValue = counter.get() + 1;
                         Thread.sleep(1000);
                         counter.set(nextValue);
@@ -148,7 +164,7 @@ public class RedissonRedLockTest {
         t.join(1000);
 
         RedissonMultiLock lock = new RedissonRedLock(lock1, lock2, lock3);
-        Assert.assertFalse(lock.tryLock());
+        Assertions.assertFalse(lock.tryLock());
         
         client1.shutdown();
         client2.shutdown();
@@ -238,7 +254,7 @@ public class RedissonRedLockTest {
         t.start();
         t.join(1000);
 
-        lockFirst.delete();
+        lockFirst.forceUnlock();
         
         RedissonMultiLock lock = new RedissonRedLock(lock1, lock2, lock3);
         lock.lock();
@@ -355,7 +371,7 @@ public class RedissonRedLockTest {
         t.start();
         t.join();
 
-        await().atMost(5, TimeUnit.SECONDS).until(() -> executed.get());
+        await().atMost(5, TimeUnit.SECONDS).untilTrue(executed);
 
         lock.unlock();
 

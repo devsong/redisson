@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,26 +15,20 @@
  */
 package org.redisson;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.List;
-import java.util.ListIterator;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.locks.Condition;
-import java.util.concurrent.locks.Lock;
-
 import org.redisson.api.RFuture;
 import org.redisson.api.RLock;
-import org.redisson.misc.RPromise;
-import org.redisson.misc.RedissonPromise;
-import org.redisson.misc.TransferListener;
+import org.redisson.api.RLockAsync;
+import org.redisson.client.RedisResponseTimeoutException;
+import org.redisson.misc.CompletableFutureWrapper;
 
-import io.netty.util.concurrent.Future;
-import io.netty.util.concurrent.FutureListener;
-import io.netty.util.internal.ThreadLocalRandom;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.Lock;
+import java.util.stream.Stream;
 
 /**
  * Groups multiple independent locks and manages them as one lock.
@@ -42,9 +36,132 @@ import io.netty.util.internal.ThreadLocalRandom;
  * @author Nikita Koksharov
  *
  */
-public class RedissonMultiLock implements Lock {
+public class RedissonMultiLock implements RLock {
 
-    final List<RLock> locks = new ArrayList<RLock>();
+    class LockState {
+        
+        private final long newLeaseTime;
+        private final long lockWaitTime;
+        private final List<RLock> acquiredLocks;
+        private final long waitTime;
+        private final long threadId;
+        private final long leaseTime;
+        private final TimeUnit unit;
+
+        private long remainTime;
+        private long time = System.currentTimeMillis();
+        private int failedLocksLimit;
+        
+        LockState(long waitTime, long leaseTime, TimeUnit unit, long threadId) {
+            this.waitTime = waitTime;
+            this.leaseTime = leaseTime;
+            this.unit = unit;
+            this.threadId = threadId;
+
+            if (leaseTime > 0) {
+                if (waitTime > 0) {
+                    newLeaseTime = unit.toMillis(waitTime)*2;
+                } else {
+                    newLeaseTime = unit.toMillis(leaseTime);
+                }
+            } else {
+                newLeaseTime = -1;
+            }
+
+            remainTime = -1;
+            if (waitTime > 0) {
+                remainTime = unit.toMillis(waitTime);
+            }
+            lockWaitTime = calcLockWaitTime(remainTime);
+            
+            failedLocksLimit = failedLocksLimit();
+            acquiredLocks = new ArrayList<>(locks.size());
+        }
+        
+        CompletionStage<Boolean> tryAcquireLockAsync(ListIterator<RLock> iterator) {
+            if (!iterator.hasNext()) {
+                return checkLeaseTimeAsync();
+            }
+
+            RLock lock = iterator.next();
+            RFuture<Boolean> lockAcquiredFuture;
+            if (waitTime <= 0 && leaseTime <= 0) {
+                lockAcquiredFuture = lock.tryLockAsync(threadId);
+            } else {
+                long awaitTime = Math.min(lockWaitTime, remainTime);
+                lockAcquiredFuture = lock.tryLockAsync(awaitTime, newLeaseTime, TimeUnit.MILLISECONDS, threadId);
+            }
+
+            return lockAcquiredFuture
+                    .exceptionally(e -> null)
+                    .thenCompose(res -> {
+                boolean lockAcquired = false;
+                if (res != null) {
+                    lockAcquired = res;
+                } else {
+                    unlockInnerAsync(Arrays.asList(lock), threadId);
+                }
+
+                if (lockAcquired) {
+                    acquiredLocks.add(lock);
+                } else {
+                    if (locks.size() - acquiredLocks.size() == failedLocksLimit()) {
+                        return checkLeaseTimeAsync();
+                    }
+
+                    if (failedLocksLimit == 0) {
+                        return unlockInnerAsync(acquiredLocks, threadId).thenCompose(r -> {
+                            if (waitTime <= 0) {
+                                return CompletableFuture.completedFuture(false);
+                            }
+                            
+                            failedLocksLimit = failedLocksLimit();
+                            acquiredLocks.clear();
+                            // reset iterator
+                            while (iterator.hasPrevious()) {
+                                iterator.previous();
+                            }
+                            
+                            return checkRemainTimeAsync(iterator);
+                        });
+                    } else {
+                        failedLocksLimit--;
+                    }
+                }
+                
+                return checkRemainTimeAsync(iterator);
+            });
+        }
+        
+        private CompletableFuture<Boolean> checkLeaseTimeAsync() {
+            if (leaseTime > 0) {
+                List<CompletableFuture<Boolean>> futures = new ArrayList<>();
+                for (RLock rLock : acquiredLocks) {
+                    RFuture<Boolean> future = ((RedissonBaseLock) rLock).expireAsync(unit.toMillis(leaseTime), TimeUnit.MILLISECONDS);
+                    futures.add(future.toCompletableFuture());
+                }
+                CompletableFuture<Void> f = CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
+                return f.thenApply(r -> true);
+            }
+
+            return CompletableFuture.completedFuture(true);
+        }
+        
+        private CompletionStage<Boolean> checkRemainTimeAsync(ListIterator<RLock> iterator) {
+            if (remainTime > 0) {
+                remainTime += -(System.currentTimeMillis() - time);
+                time = System.currentTimeMillis();
+                if (remainTime <= 0) {
+                    return unlockInnerAsync(acquiredLocks, threadId).thenApply(res -> false);
+                }
+            }
+            
+            return tryAcquireLockAsync(iterator);
+        }
+        
+    }
+    
+    final List<RLock> locks = new ArrayList<>();
     
     /**
      * Creates instance with multiple {@link RLock} objects.
@@ -68,6 +185,7 @@ public class RedissonMultiLock implements Lock {
         }
     }
 
+    @Override
     public void lock(long leaseTime, TimeUnit unit) {
         try {
             lockInterruptibly(leaseTime, unit);
@@ -76,14 +194,20 @@ public class RedissonMultiLock implements Lock {
         }
     }
     
+    @Override
     public RFuture<Void> lockAsync(long leaseTime, TimeUnit unit) {
+        return lockAsync(leaseTime, unit, Thread.currentThread().getId());
+    }
+    
+    @Override
+    public RFuture<Void> lockAsync(long leaseTime, TimeUnit unit, long threadId) {
         long baseWaitTime = locks.size() * 1500;
-        long waitTime = -1;
-        if (leaseTime == -1) {
+        long waitTime;
+        if (leaseTime <= 0) {
             waitTime = baseWaitTime;
-            unit = TimeUnit.MILLISECONDS;
         } else {
-            waitTime = unit.toMillis(leaseTime);
+            leaseTime = unit.toMillis(leaseTime);
+            waitTime = leaseTime;
             if (waitTime <= 2000) {
                 waitTime = 2000;
             } else if (waitTime <= baseWaitTime) {
@@ -91,28 +215,18 @@ public class RedissonMultiLock implements Lock {
             } else {
                 waitTime = ThreadLocalRandom.current().nextLong(baseWaitTime, waitTime);
             }
-            waitTime = unit.convert(waitTime, TimeUnit.MILLISECONDS);
         }
 
-        RPromise<Void> result = new RedissonPromise<Void>();
-        tryLockAsync(leaseTime, unit, waitTime, result);
-        return result;
+        CompletionStage<Void> f = tryLockAsyncCycle(threadId, leaseTime, TimeUnit.MILLISECONDS, waitTime);
+        return new CompletableFutureWrapper<>(f);
     }
-
-    protected void tryLockAsync(final long leaseTime, final TimeUnit unit, final long waitTime, final RPromise<Void> result) {
-        tryLockAsync(waitTime, leaseTime, unit).addListener(new FutureListener<Boolean>() {
-            @Override
-            public void operationComplete(Future<Boolean> future) throws Exception {
-                if (!future.isSuccess()) {
-                    result.tryFailure(future.cause());
-                    return;
-                }
-                
-                if (future.getNow()) {
-                    result.trySuccess(null);
-                } else {
-                    tryLockAsync(leaseTime, unit, waitTime, result);
-                }
+    
+    protected CompletionStage<Void> tryLockAsyncCycle(long threadId, long leaseTime, TimeUnit unit, long waitTime) {
+        return tryLockAsync(waitTime, leaseTime, unit, threadId).thenCompose(res -> {
+            if (res) {
+                return CompletableFuture.completedFuture(null);
+            } else {
+                return tryLockAsyncCycle(threadId, leaseTime, unit, waitTime);
             }
         });
     }
@@ -123,26 +237,27 @@ public class RedissonMultiLock implements Lock {
         lockInterruptibly(-1, null);
     }
 
+    @Override
     public void lockInterruptibly(long leaseTime, TimeUnit unit) throws InterruptedException {
         long baseWaitTime = locks.size() * 1500;
-        long waitTime = -1;
-        if (leaseTime == -1) {
-            waitTime = baseWaitTime;
-            unit = TimeUnit.MILLISECONDS;
-        } else {
-            waitTime = unit.toMillis(leaseTime);
-            if (waitTime <= 2000) {
-                waitTime = 2000;
-            } else if (waitTime <= baseWaitTime) {
-                waitTime = ThreadLocalRandom.current().nextLong(waitTime/2, waitTime);
-            } else {
-                waitTime = ThreadLocalRandom.current().nextLong(baseWaitTime, waitTime);
-            }
-            waitTime = unit.convert(waitTime, TimeUnit.MILLISECONDS);
-        }
-        
         while (true) {
-            if (tryLock(waitTime, leaseTime, unit)) {
+            long waitTime;
+            if (leaseTime <= 0) {
+                waitTime = baseWaitTime;
+            } else {
+                waitTime = unit.toMillis(leaseTime);
+                if (waitTime <= baseWaitTime) {
+                    waitTime = ThreadLocalRandom.current().nextLong(waitTime/2, waitTime);
+                } else {
+                    waitTime = ThreadLocalRandom.current().nextLong(baseWaitTime, waitTime);
+                }
+            }
+
+            if (leaseTime > 0) {
+                leaseTime = unit.toMillis(leaseTime);
+            }
+
+            if (tryLock(waitTime, leaseTime, TimeUnit.MILLISECONDS)) {
                 return;
             }
         }
@@ -159,41 +274,23 @@ public class RedissonMultiLock implements Lock {
     }
 
     protected void unlockInner(Collection<RLock> locks) {
-        List<RFuture<Void>> futures = new ArrayList<RFuture<Void>>(locks.size());
-        for (RLock lock : locks) {
-            futures.add(lock.unlockAsync());
-        }
-
-        for (RFuture<Void> unlockFuture : futures) {
-            unlockFuture.awaitUninterruptibly();
-        }
+        locks.stream()
+                .map(RLockAsync::unlockAsync)
+                .forEach(f -> {
+                    try {
+                        f.toCompletableFuture().join();
+                    } catch (Exception e) {
+                        // skip
+                    }
+                });
     }
     
     protected RFuture<Void> unlockInnerAsync(Collection<RLock> locks, long threadId) {
-        if (locks.isEmpty()) {
-            return RedissonPromise.newSucceededFuture(null);
-        }
-        
-        final RPromise<Void> result = new RedissonPromise<Void>();
-        final AtomicInteger counter = new AtomicInteger(locks.size());
-        for (RLock lock : locks) {
-            lock.unlockAsync(threadId).addListener(new FutureListener<Void>() {
-                @Override
-                public void operationComplete(Future<Void> future) throws Exception {
-                    if (!future.isSuccess()) {
-                        result.tryFailure(future.cause());
-                        return;
-                    }
-                    
-                    if (counter.decrementAndGet() == 0) {
-                        result.trySuccess(null);
-                    }
-                }
-            });
-        }
-        return result;
+        CompletableFuture[] s = locks.stream().map(l -> l.unlockAsync(threadId).toCompletableFuture())
+                                                .toArray(CompletableFuture[]::new);
+        CompletableFuture<Void> future = CompletableFuture.allOf(s);
+        return new CompletableFutureWrapper<>(future);
     }
-
 
     @Override
     public boolean tryLock(long waitTime, TimeUnit unit) throws InterruptedException {
@@ -204,6 +301,7 @@ public class RedissonMultiLock implements Lock {
         return 0;
     }
     
+    @Override
     public boolean tryLock(long waitTime, long leaseTime, TimeUnit unit) throws InterruptedException {
 //        try {
 //            return tryLockAsync(waitTime, leaseTime, unit).get();
@@ -211,29 +309,36 @@ public class RedissonMultiLock implements Lock {
 //            throw new IllegalStateException(e);
 //        }
         long newLeaseTime = -1;
-        if (leaseTime != -1) {
-            newLeaseTime = unit.toMillis(waitTime)*2;
+        if (leaseTime > 0) {
+            if (waitTime > 0) {
+                newLeaseTime = unit.toMillis(waitTime)*2;
+            } else {
+                newLeaseTime = unit.toMillis(leaseTime);
+            }
         }
         
         long time = System.currentTimeMillis();
         long remainTime = -1;
-        if (waitTime != -1) {
+        if (waitTime > 0) {
             remainTime = unit.toMillis(waitTime);
         }
         long lockWaitTime = calcLockWaitTime(remainTime);
         
         int failedLocksLimit = failedLocksLimit();
-        List<RLock> acquiredLocks = new ArrayList<RLock>(locks.size());
+        List<RLock> acquiredLocks = new ArrayList<>(locks.size());
         for (ListIterator<RLock> iterator = locks.listIterator(); iterator.hasNext();) {
             RLock lock = iterator.next();
             boolean lockAcquired;
             try {
-                if (waitTime == -1 && leaseTime == -1) {
+                if (waitTime <= 0 && leaseTime <= 0) {
                     lockAcquired = lock.tryLock();
                 } else {
                     long awaitTime = Math.min(lockWaitTime, remainTime);
                     lockAcquired = lock.tryLock(awaitTime, newLeaseTime, TimeUnit.MILLISECONDS);
                 }
+            } catch (RedisResponseTimeoutException e) {
+                unlockInner(Arrays.asList(lock));
+                lockAcquired = false;
             } catch (Exception e) {
                 lockAcquired = false;
             }
@@ -247,7 +352,7 @@ public class RedissonMultiLock implements Lock {
 
                 if (failedLocksLimit == 0) {
                     unlockInner(acquiredLocks);
-                    if (waitTime == -1 && leaseTime == -1) {
+                    if (waitTime <= 0) {
                         return false;
                     }
                     failedLocksLimit = failedLocksLimit();
@@ -261,8 +366,8 @@ public class RedissonMultiLock implements Lock {
                 }
             }
             
-            if (remainTime != -1) {
-                remainTime -= (System.currentTimeMillis() - time);
+            if (remainTime > 0) {
+                remainTime -= System.currentTimeMillis() - time;
                 time = System.currentTimeMillis();
                 if (remainTime <= 0) {
                     unlockInner(acquiredLocks);
@@ -271,168 +376,26 @@ public class RedissonMultiLock implements Lock {
             }
         }
 
-        if (leaseTime != -1) {
-            List<RFuture<Boolean>> futures = new ArrayList<RFuture<Boolean>>(acquiredLocks.size());
-            for (RLock rLock : acquiredLocks) {
-                RFuture<Boolean> future = rLock.expireAsync(unit.toMillis(leaseTime), TimeUnit.MILLISECONDS);
-                futures.add(future);
-            }
-            
-            for (RFuture<Boolean> rFuture : futures) {
-                rFuture.syncUninterruptibly();
-            }
+        if (leaseTime > 0) {
+            acquiredLocks.stream()
+                    .map(l -> (RedissonBaseLock) l)
+                    .map(l -> l.expireAsync(unit.toMillis(leaseTime), TimeUnit.MILLISECONDS))
+                    .forEach(f -> f.toCompletableFuture().join());
         }
         
         return true;
     }
 
-    private void tryAcquireLockAsync(final ListIterator<RLock> iterator, final List<RLock> acquiredLocks, final RPromise<Boolean> result, 
-            final long lockWaitTime, final long waitTime, final long leaseTime, final long newLeaseTime, 
-            final AtomicLong remainTime, final AtomicLong time, final AtomicInteger failedLocksLimit, final TimeUnit unit, final long threadId) {
-        if (!iterator.hasNext()) {
-            checkLeaseTimeAsync(acquiredLocks, result, leaseTime, unit);
-            return;
-        }
-
-        final RLock lock = iterator.next();
-        RPromise<Boolean> lockAcquired = new RedissonPromise<Boolean>();
-        if (waitTime == -1 && leaseTime == -1) {
-            lock.tryLockAsync(threadId)
-                .addListener(new TransferListener<Boolean>(lockAcquired));
-        } else {
-            long awaitTime = Math.min(lockWaitTime, remainTime.get());
-            lock.tryLockAsync(awaitTime, newLeaseTime, TimeUnit.MILLISECONDS, threadId)
-                .addListener(new TransferListener<Boolean>(lockAcquired));;
-        }
-        
-        lockAcquired.addListener(new FutureListener<Boolean>() {
-            @Override
-            public void operationComplete(Future<Boolean> future) throws Exception {
-                boolean lockAcquired = false;
-                if (future.getNow() != null) {
-                    lockAcquired = future.getNow();
-                }
-                
-                if (lockAcquired) {
-                    acquiredLocks.add(lock);
-                } else {
-                    if (locks.size() - acquiredLocks.size() == failedLocksLimit()) {
-                        checkLeaseTimeAsync(acquiredLocks, result, leaseTime, unit);
-                        return;
-                    }
-
-                    if (failedLocksLimit.get() == 0) {
-                        unlockInnerAsync(acquiredLocks, threadId).addListener(new FutureListener<Void>() {
-                            @Override
-                            public void operationComplete(Future<Void> future) throws Exception {
-                                if (!future.isSuccess()) {
-                                    result.tryFailure(future.cause());
-                                    return;
-                                }
-                                
-                                if (waitTime == -1 && leaseTime == -1) {
-                                    result.trySuccess(false);
-                                    return;
-                                }
-                                
-                                failedLocksLimit.set(failedLocksLimit());
-                                acquiredLocks.clear();
-                                // reset iterator
-                                while (iterator.hasPrevious()) {
-                                    iterator.previous();
-                                }
-                                
-                                checkRemainTimeAsync(iterator, acquiredLocks, result, 
-                                        lockWaitTime, waitTime, leaseTime, newLeaseTime, 
-                                        remainTime, time, failedLocksLimit, unit, threadId);
-                            }
-                        });
-                        return;
-                    } else {
-                        failedLocksLimit.decrementAndGet();
-                    }
-                }
-                
-                checkRemainTimeAsync(iterator, acquiredLocks, result, 
-                        lockWaitTime, waitTime, leaseTime, newLeaseTime, 
-                        remainTime, time, failedLocksLimit, unit, threadId);
-            }
-        });
-    }
-
-    private void checkLeaseTimeAsync(List<RLock> acquiredLocks, final RPromise<Boolean> result, long leaseTime, TimeUnit unit) {
-        if (leaseTime != -1) {
-            final AtomicInteger counter = new AtomicInteger(locks.size());
-            for (RLock rLock : acquiredLocks) {
-                RFuture<Boolean> future = rLock.expireAsync(unit.toMillis(leaseTime), TimeUnit.MILLISECONDS);
-                future.addListener(new FutureListener<Boolean>() {
-                    @Override
-                    public void operationComplete(Future<Boolean> future) throws Exception {
-                        if (!future.isSuccess()) {
-                            result.tryFailure(future.cause());
-                            return;
-                        }
-                        
-                        if (counter.decrementAndGet() == 0) {
-                            result.trySuccess(true);
-                        }
-                    }
-                });
-            }
-            return;
-        }
-        
-        result.trySuccess(true);
+    @Override
+    public RFuture<Boolean> tryLockAsync(long waitTime, long leaseTime, TimeUnit unit, long threadId) {
+        LockState state = new LockState(waitTime, leaseTime, unit, threadId);
+        CompletionStage<Boolean> f = state.tryAcquireLockAsync(locks.listIterator());
+        return new CompletableFutureWrapper<>(f);
     }
     
-    protected void checkRemainTimeAsync(ListIterator<RLock> iterator, List<RLock> acquiredLocks, final RPromise<Boolean> result, 
-            long lockWaitTime, long waitTime, long leaseTime, long newLeaseTime, 
-            AtomicLong remainTime, AtomicLong time, AtomicInteger failedLocksLimit, TimeUnit unit, long threadId) {
-        if (remainTime.get() != -1) {
-            remainTime.addAndGet(-(System.currentTimeMillis() - time.get()));
-            time.set(System.currentTimeMillis());;
-            if (remainTime.get() <= 0) {
-                unlockInnerAsync(acquiredLocks, threadId).addListener(new FutureListener<Void>() {
-                    @Override
-                    public void operationComplete(Future<Void> future) throws Exception {
-                        if (!future.isSuccess()) {
-                            result.tryFailure(future.cause());
-                            return;
-                        }
-                        
-                        result.trySuccess(false);
-                    }
-                });
-                return;
-            }
-        }
-        
-        tryAcquireLockAsync(iterator, acquiredLocks, result, lockWaitTime, waitTime, 
-                leaseTime, newLeaseTime, remainTime, time, failedLocksLimit, unit, threadId);
-    }
-    
+    @Override
     public RFuture<Boolean> tryLockAsync(long waitTime, long leaseTime, TimeUnit unit) {
-        RPromise<Boolean> result = new RedissonPromise<Boolean>();
-        long newLeaseTime = -1;
-        if (leaseTime != -1) {
-            newLeaseTime = unit.toMillis(waitTime)*2;
-        }
-        
-        AtomicLong time = new AtomicLong(System.currentTimeMillis());
-        AtomicLong remainTime = new AtomicLong(-1);
-        if (waitTime != -1) {
-            remainTime.set(unit.toMillis(waitTime));
-        }
-        long lockWaitTime = calcLockWaitTime(remainTime.get());
-        
-        AtomicInteger failedLocksLimit = new AtomicInteger(failedLocksLimit());
-        List<RLock> acquiredLocks = new ArrayList<RLock>(locks.size());
-        long threadId = Thread.currentThread().getId();
-        tryAcquireLockAsync(locks.listIterator(), acquiredLocks, result, 
-                lockWaitTime, waitTime, leaseTime, newLeaseTime, 
-                remainTime, time, failedLocksLimit, unit, threadId);
-        
-        return result;
+        return tryLockAsync(waitTime, leaseTime, unit, Thread.currentThread().getId());
     }
 
     
@@ -440,26 +403,114 @@ public class RedissonMultiLock implements Lock {
         return remainTime;
     }
 
+    @Override
     public RFuture<Void> unlockAsync(long threadId) {
         return unlockInnerAsync(locks, threadId);
     }
     
     @Override
     public void unlock() {
-        List<RFuture<Void>> futures = new ArrayList<RFuture<Void>>(locks.size());
-
-        for (RLock lock : locks) {
-            futures.add(lock.unlockAsync());
-        }
-
-        for (RFuture<Void> future : futures) {
-            future.syncUninterruptibly();
-        }
+        locks.forEach(Lock::unlock);
     }
-
 
     @Override
     public Condition newCondition() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public RFuture<Boolean> forceUnlockAsync() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public RFuture<Void> unlockAsync() {
+        return unlockAsync(Thread.currentThread().getId());
+    }
+
+    @Override
+    public RFuture<Boolean> tryLockAsync() {
+        return tryLockAsync(Thread.currentThread().getId());
+    }
+
+    @Override
+    public RFuture<Void> lockAsync() {
+        return lockAsync(Thread.currentThread().getId());
+    }
+
+    @Override
+    public RFuture<Void> lockAsync(long threadId) {
+        return lockAsync(-1, null, threadId);
+    }
+
+    @Override
+    public RFuture<Boolean> tryLockAsync(long threadId) {
+        return tryLockAsync(-1, -1, null, threadId);
+    }
+
+    @Override
+    public RFuture<Boolean> tryLockAsync(long waitTime, TimeUnit unit) {
+        return tryLockAsync(waitTime, -1, unit);
+    }
+
+    @Override
+    public RFuture<Integer> getHoldCountAsync() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public String getName() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean forceUnlock() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean isLocked() {
+        throw new UnsupportedOperationException();
+    }
+    
+    @Override
+    public RFuture<Boolean> isLockedAsync() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean isHeldByThread(long threadId) {
+        return locks.stream().map(l -> l.isHeldByThread(threadId)).reduce(true, (r, u) -> r && u);
+    }
+
+    @Override
+    public RFuture<Boolean> isHeldByThreadAsync(long threadId) {
+        CompletableFuture<Boolean>[] s = locks.stream().map(l -> l.isHeldByThreadAsync(threadId).toCompletableFuture())
+                                                        .toArray(CompletableFuture[]::new);
+        CompletableFuture<Void> future = CompletableFuture.allOf(s);
+        CompletableFuture<Boolean> f = future.thenApply(v -> Stream.of(s).map(r2 -> r2.getNow(false))
+                                                            .reduce(true, (r, u) -> r && u));
+        return new CompletableFutureWrapper<>(f);
+    }
+
+    @Override
+    public boolean isHeldByCurrentThread() {
+        return locks.stream().map(l -> l.isHeldByCurrentThread())
+                                .reduce(true, (r, u) -> r && u);
+    }
+
+    @Override
+    public int getHoldCount() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public RFuture<Long> remainTimeToLiveAsync() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public long remainTimeToLive() {
         throw new UnsupportedOperationException();
     }
 

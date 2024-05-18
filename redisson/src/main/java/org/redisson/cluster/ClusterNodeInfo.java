@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,10 +15,12 @@
  */
 package org.redisson.cluster;
 
-import java.net.URI;
+import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.Set;
-import org.redisson.misc.URIBuilder;
+
+import org.redisson.misc.RedisURI;
 
 /**
  * 
@@ -27,16 +29,29 @@ import org.redisson.misc.URIBuilder;
  */
 public class ClusterNodeInfo {
 
-    public enum Flag {NOFLAGS, SLAVE, MASTER, MYSELF, FAIL, HANDSHAKE, NOADDR};
+    public enum Flag {
+        NOFLAGS("noflags"), SLAVE("slave"), MASTER("master"), MYSELF("myself"),
+        FAIL("fail"), EVENTUAL_FAIL("fail?"), HANDSHAKE("handshake"), NOADDR("noaddr");
+
+        private final String value;
+
+        Flag(String value) {
+            this.value = value;
+        }
+
+        public String getValue() {
+            return value;
+        }
+    };
 
     private final String nodeInfo;
     
     private String nodeId;
-    private URI address;
-    private final Set<Flag> flags = new HashSet<Flag>();
+    private RedisURI address;
+    private final Set<Flag> flags = EnumSet.noneOf(Flag.class);
     private String slaveOf;
 
-    private final Set<ClusterSlotRange> slotRanges = new HashSet<ClusterSlotRange>();
+    private final Set<ClusterSlotRange> slotRanges = new HashSet<>();
 
     public ClusterNodeInfo(String nodeInfo) {
         this.nodeInfo = nodeInfo;
@@ -49,18 +64,18 @@ public class ClusterNodeInfo {
         this.nodeId = nodeId;
     }
 
-    public URI getAddress() {
+    public RedisURI getAddress() {
         return address;
     }
     public void setAddress(String address) {
-        this.address = URIBuilder.create(address);
+        this.address = new RedisURI(address);
     }
 
     public void addSlotRange(ClusterSlotRange range) {
         slotRanges.add(range);
     }
     public Set<ClusterSlotRange> getSlotRanges() {
-        return slotRanges;
+        return Collections.unmodifiableSet(slotRanges);
     }
 
     public boolean containsFlag(Flag flag) {

@@ -1,5 +1,5 @@
 /**
- * Copyright 2018 Nikita Koksharov
+ * Copyright (c) 2013-2024 Nikita Koksharov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ package org.redisson.client.protocol.decoder;
 import java.util.List;
 
 import org.redisson.api.GeoPosition;
+import org.redisson.client.codec.Codec;
 import org.redisson.client.codec.DoubleCodec;
 import org.redisson.client.handler.State;
 import org.redisson.client.protocol.Decoder;
@@ -30,7 +31,7 @@ import org.redisson.client.protocol.Decoder;
 public class GeoPositionDecoder implements MultiDecoder<GeoPosition> {
 
     @Override
-    public Decoder<Object> getDecoder(int paramNum, State state) {
+    public Decoder<Object> getDecoder(Codec codec, int paramNum, State state, long size) {
         return DoubleCodec.INSTANCE.getValueDecoder();
     }
     
@@ -40,8 +41,8 @@ public class GeoPositionDecoder implements MultiDecoder<GeoPosition> {
             return null;
         }
 
-        Double longitude = (Double)parts.get(0);
-        Double latitude = (Double)parts.get(1);
+        Double longitude = (Double) parts.get(0);
+        Double latitude = (Double) parts.get(1);
         return new GeoPosition(longitude, latitude);
     }
 
